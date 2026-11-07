@@ -6,3 +6,7 @@
 /crates/ghostty_vt/Cargo.lock
 
 **/__pycache__/
+
+# Dev shell state (nix/shell.nix)
+/.local/
+/.claude-config/

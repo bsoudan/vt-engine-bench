@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Enter the dev shell, first pinning nixpkgs to the system's revision if it has drifted.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+reg=/etc/nix/registry.json
+sys=$(jq -r '.flakes[] | select(.from.id == "nixpkgs") | .to.rev // empty' "$reg" 2>/dev/null || true)
+dev=$(jq -r '.nodes.nixpkgs.locked.rev // empty' flake.lock 2>/dev/null || true)
+
+if [ -n "$sys" ] && [ "$sys" != "$dev" ]; then
+  old=${dev:0:12}
+  echo "dev: syncing nixpkgs ${old:-unlocked} -> ${sys:0:12} (following system)" >&2
+  sed -i -E "s|(nixpkgs\.url = \")[^\"]*(\";)|\1github:NixOS/nixpkgs/$sys\2|" flake.nix
+  grep -q "github:NixOS/nixpkgs/$sys\"" flake.nix \
+    || { echo "dev: no nixpkgs.url line found in flake.nix" >&2; exit 1; }
+  nix flake update nixpkgs
+fi
+
+exec nix develop "$@"
