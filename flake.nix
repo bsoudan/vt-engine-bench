@@ -18,11 +18,11 @@
       {
         packages.sandbox = sandbox;
 
-        # Everything in the repo except the macOS-only GPUI window-capture
-        # harness (scripts/run_gpui_bench.sh, scripts/capture_gpui.swift and
-        # the `gpui-bench` cargo feature behind them) builds and runs here:
+        # Everything in the repo builds and runs here:
         #   cargo test                            # core compatibility fixtures
         #   cargo run --release                   # headless benchmark
+        #   bash scripts/run_gpui_bench.sh        # GPUI window capture (needs an
+        #                                         # unlocked GNOME Wayland session)
         #   python3 scripts/capture_tmux.py       # re-record the tmux fixture
         #   python3 scripts/summarize_gpui.py ... # summarize recorded GPUI runs
         devShells.default = pkgs.callPackage ./nix/shell.nix { inherit name sandbox; };

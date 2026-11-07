@@ -9,8 +9,8 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use gpui::{
-    div, prelude::*, px, rgb, App, AppContext, Application, Context, FocusHandle, IntoElement,
-    Keystroke, Render, Window, WindowOptions,
+    div, point, prelude::*, px, rgb, size, App, AppContext, Application, Bounds, Context,
+    FocusHandle, IntoElement, Keystroke, Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use wezterm_term::{Terminal as WezTerm, TerminalConfiguration, TerminalSize};
 
@@ -19,6 +19,13 @@ const ROWS: usize = 40;
 const OUTPUT_FRAMES: usize = 80;
 const INPUT_FRAMES: usize = 40;
 const TMUX: &[u8] = include_bytes!("../../fixtures/tmux-redraw.bin");
+// Menlo ships with macOS; DejaVu Sans Mono is the common Linux monospace.
+// VT_BENCH_FONT overrides either when a machine lacks it.
+const DEFAULT_FONT: &str = if cfg!(target_os = "macos") {
+    "Menlo"
+} else {
+    "DejaVu Sans Mono"
+};
 static RENDERS: AtomicUsize = AtomicUsize::new(0);
 static SYNTHETIC_KEY: AtomicBool = AtomicBool::new(false);
 
@@ -115,6 +122,7 @@ struct View {
     engine: Engine,
     rows: Vec<String>,
     focus: FocusHandle,
+    font: SharedString,
     // Cycle four colors to identify skipped captured frames.
     marker: u8,
     input_index: usize,
@@ -161,7 +169,7 @@ impl Render for View {
                     .flex()
                     .flex_col()
                     .text_size(px(13.0))
-                    .font_family("Menlo")
+                    .font_family(self.font.clone())
                     .children(
                         self.rows
                             .iter()
@@ -180,10 +188,26 @@ fn main() {
     let events_path = args.next().expect("missing events.csv path");
     let ready = args.next().expect("missing capture-ready file path");
     let events = Arc::new(Mutex::new(Vec::new()));
+    let font: SharedString = std::env::var("VT_BENCH_FONT")
+        .unwrap_or_else(|_| DEFAULT_FONT.to_owned())
+        .into();
     Application::new().run(move |cx: &mut App| {
         let view_events = events.clone();
+        let options = WindowOptions {
+            // An ordinary window on Linux too: the collector finds the marker
+            // bar in a monitor stream. Not fullscreen, because Mutter then
+            // scans the window out directly and the screencast stream starves.
+            // macOS keeps the default bounds it was measured with.
+            window_bounds: cfg!(target_os = "linux").then(|| {
+                WindowBounds::Windowed(Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    size(px(1280.0), px(800.0)),
+                ))
+            }),
+            ..WindowOptions::default()
+        };
         let view = cx
-            .open_window(WindowOptions::default(), |window, cx| {
+            .open_window(options, |window, cx| {
                 let focus = cx.focus_handle();
                 focus.focus(window, cx);
                 cx.new(|_| {
@@ -193,6 +217,7 @@ fn main() {
                         engine,
                         rows,
                         focus,
+                        font: font.clone(),
                         marker: 0,
                         input_index: 0,
                         events: view_events.clone(),
@@ -213,7 +238,7 @@ fn main() {
                     .await;
             }
             if !std::path::Path::new(&ready).exists() {
-                eprintln!("ScreenCaptureKit collector did not attach; no benchmark produced");
+                eprintln!("window-capture collector did not attach; no benchmark produced");
                 cx.update(|cx| cx.quit()).ok();
                 return;
             }

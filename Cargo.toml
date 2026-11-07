@@ -20,3 +20,9 @@ wezterm-term = { path = "engines/wezterm/term" }
 wezterm-cell = { path = "engines/wezterm/wezterm-cell" }
 
 ghostty_vt = { package = "current-ghostty", path = "crates/current-ghostty" }
+
+# gpui -> http_client -> async-tar pins xattr 0.2.3, which no longer compiles
+# against current libc on Linux (the ENOATTR alias was removed). crates/xattr
+# is that release with a two-line fix; see crates/xattr/README.md.
+[patch.crates-io]
+xattr = { path = "crates/xattr" }

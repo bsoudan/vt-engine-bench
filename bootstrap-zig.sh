@@ -11,7 +11,8 @@ os="$(uname -s)"
 arch="$(uname -m)"
 
 if [[ "${os}" != "Darwin" ]]; then
-  echo "Unsupported OS: ${os}" >&2
+  echo "Unsupported OS: ${os}; this script only knows the macOS tarballs." >&2
+  echo "On Linux, ./enter opens the Nix dev shell, which provides Zig ${VERSION}." >&2
   exit 1
 fi
 

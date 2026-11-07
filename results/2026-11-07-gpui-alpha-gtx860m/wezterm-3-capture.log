@@ -1,0 +1,9 @@
+locating the window on: monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary
+Traceback (most recent call last):
+  File "/home/bsoudan/src/vt-engine-bench/scripts/capture_gpui_linux.py", line 247, in _on_sample
+    gpu = any(e.get_factory().get_name() == "gldownload" for e in self.pipeline.iterate_elements())
+                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+TypeError: 'Iterator' object is not iterable
+marker bar at (320, 156) on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 108, 1920x1080)
+marker sampled on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 108, 1920x1080)
+captured 114 marker changes from 134 marker frames (139 PipeWire frames on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 108, 1920x1080))
