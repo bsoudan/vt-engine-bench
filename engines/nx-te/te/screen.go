@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 
@@ -141,6 +142,13 @@ type Screen struct {
 	// ScrollbackScreen's history, for compactTables.
 	tables   cellTables
 	moreRows func() [][]gcell
+
+	// identity remembers whether the charset table last asked about maps
+	// every character to itself (charsetIdentity).
+	identity struct {
+		table *rune
+		ok    bool
+	}
 
 	// hot is the state of the modes the hot paths read — for each cell
 	// drawn, each row scrolled, each blank cell made — as booleans, kept
@@ -403,24 +411,31 @@ func (s *Screen) protected(g gcell, private bool) bool {
 
 // Draw renders text at the current cursor position.
 func (s *Screen) Draw(data string) {
-	if !asciiFastPath {
+	if !asciiFastPath || !s.charsetIdentity() {
 		s.drawGeneral(data)
 		return
 	}
-	ascii := s.asciiDrawable()
+	// The active charset maps every character to itself, so the text is
+	// drawn as it is: runs of printable ASCII a byte a cell (drawASCII),
+	// unless insert mode shifts the row under each, and the rest a cluster
+	// at a time, segmented once.
+	ascii := !s.isModeSet(ModeIRM)
+	sid := s.styleID(s.Cursor.Attr)
+	state := -1
 	for data != "" {
 		if ascii {
 			if n := asciiRun(data); n > 0 {
-				s.drawASCII(data[:n])
+				s.drawASCII(data[:n], sid)
 				data = data[n:]
+				state = -1
 				continue
 			}
 		}
-		n := generalRun(data)
-		if !s.drawGeneral(data[:n]) {
+		var cluster string
+		cluster, data, _, state = uniseg.FirstGraphemeClusterInString(data, state)
+		if !s.drawCluster(cluster, sid) {
 			return
 		}
-		data = data[n:]
 	}
 }
 
@@ -442,43 +457,34 @@ func asciiRun(data string) int {
 	return n
 }
 
-// generalRun is the length of data's leading run for the general path: whole
-// grapheme clusters, up to the first that is one printable ASCII byte on its
-// own, where an ASCII run can begin.
-func generalRun(data string) int {
-	n := 0
-	state := -1
-	rest := data
-	for len(rest) > 0 {
-		var cluster string
-		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
-		if n > 0 && len(cluster) == 1 && cluster[0] >= 0x20 && cluster[0] < 0x7f {
-			break
-		}
-		n += len(cluster)
-	}
-	return n
-}
-
-// asciiDrawable says the screen is in a state where each printable ASCII
-// byte is one narrow cell: the active charset maps ASCII to itself and
-// insert mode is off.
-func (s *Screen) asciiDrawable() bool {
+// charsetIdentity says the active charset maps every Latin-1 character to
+// itself, so translate would change nothing. The sets are shared tables
+// (charsets.go), so the answer is remembered by the table last asked about.
+func (s *Screen) charsetIdentity() bool {
 	mapping := s.G0
 	if s.Charset == 1 {
 		mapping = s.G1
 	}
-	for r := rune(0x20); r < 0x7f; r++ {
+	if len(mapping) < 256 {
+		return false
+	}
+	if &mapping[0] == s.identity.table {
+		return s.identity.ok
+	}
+	ok := true
+	for r := rune(0); r < 256; r++ {
 		if mapping[r] != r {
-			return false
+			ok = false
+			break
 		}
 	}
-	return !s.isModeSet(ModeIRM)
+	s.identity.table, s.identity.ok = &mapping[0], ok
+	return ok
 }
 
-// drawGeneral is the general path: it defines what a draw does, and
-// drawASCII must match it cell for cell. False when it stopped at a cluster
-// it does not draw, with the rest of data undrawn.
+// drawGeneral is the general path: it defines what a draw does, and the
+// paths Draw takes must match it cell for cell. False when it stopped at a
+// cluster it does not draw, with the rest of data undrawn.
 func (s *Screen) drawGeneral(data string) bool {
 	data = s.translate(data)
 	sid := s.styleID(s.Cursor.Attr) // the style every cell drawn here wears
@@ -486,92 +492,111 @@ func (s *Screen) drawGeneral(data string) bool {
 	// word, sentence and line breaks for every step, which nothing here reads.
 	state := -1
 	for len(data) > 0 {
-		var grapheme string
-		grapheme, data, _, state = uniseg.FirstGraphemeClusterInString(data, state)
-		// A cluster the terminal draws as several glyphs (a ZWJ sequence it does
-		// not join, a modifier beside its base) is drawn here as those glyphs.
-		for _, cluster := range s.Widths.Pieces(grapheme) {
-			width := s.Widths.Width(cluster)
-			limit := s.Columns - 1
-			if s.isModeSet(ModeDECLRMM) {
-				limit = s.rightMargin
-			}
+		var cluster string
+		cluster, data, _, state = uniseg.FirstGraphemeClusterInString(data, state)
+		if !s.drawCluster(cluster, sid) {
+			return false
+		}
+	}
+	return true
+}
 
-			if s.wrapNext && width > 0 {
-				s.wrapNext = false
-				s.markWrapped(s.Cursor.Row, limit)
-				s.CarriageReturn()
-				s.LineFeed()
-			}
-			if width > 0 && s.Cursor.Col > limit {
-				s.Cursor.Col = limit
-			}
+// drawCluster draws one grapheme cluster in style sid: as the glyphs the
+// terminal draws it as (a ZWJ sequence it does not join, a modifier beside
+// its base), each at its width. A cluster of one character is one glyph,
+// its width remembered (widthOf). False when the cluster is not drawn.
+func (s *Screen) drawCluster(cluster string, sid uint16) bool {
+	if r, n := utf8.DecodeRuneInString(cluster); n == len(cluster) && (r != utf8.RuneError || cluster == "�") {
+		return s.drawGlyph(cluster, s.widthOf(gcell{text: uint32(r)}), sid)
+	}
+	for _, glyph := range s.Widths.Pieces(cluster) {
+		if !s.drawGlyph(glyph, s.Widths.Width(glyph), sid) {
+			return false
+		}
+	}
+	return true
+}
 
-			// A width-2 cluster that can't fit in the single remaining column wraps
-			// to the next line (autowrap), blanking the last cell — xterm does not
-			// split a wide char across the right edge. Guarded so a 1-column screen
-			// can't loop, and only when a row below exists to wrap into without
-			// scrolling (on the last line the existing deferred-wrap applies, which
-			// the pyte conformance suite encodes for the line-end case).
-			if width == 2 && s.Cursor.Col == limit && s.Cursor.Col > 0 &&
-				s.Cursor.Row < s.Lines-1 && s.isModeSet(ModeDECAWM) {
-				s.rows[s.Cursor.Row][s.Cursor.Col] = s.blankCell().setEmpty(true) // the glyph goes on the next row whole
-				s.markWrapped(s.Cursor.Row, limit)
-				s.CarriageReturn()
-				s.LineFeed()
-			}
+// drawGlyph draws one glyph of width columns at the cursor, in style sid.
+func (s *Screen) drawGlyph(cluster string, width int, sid uint16) bool {
+	limit := s.Columns - 1
+	if s.isModeSet(ModeDECLRMM) {
+		limit = s.rightMargin
+	}
 
-			if s.isModeSet(ModeIRM) && width > 0 {
-				s.InsertCharacters(width)
-			}
+	if s.wrapNext && width > 0 {
+		s.wrapNext = false
+		s.markWrapped(s.Cursor.Row, limit)
+		s.CarriageReturn()
+		s.LineFeed()
+	}
+	if width > 0 && s.Cursor.Col > limit {
+		s.Cursor.Col = limit
+	}
 
-			line := s.rows[s.Cursor.Row]
-			switch {
-			case width == 1:
-				s.clearWidePairAt(line, s.Cursor.Col)
-				line[s.Cursor.Col] = s.cellOf(cluster, sid)
-			case width == 2:
-				s.clearWidePairAt(line, s.Cursor.Col)
-				if s.Cursor.Col+1 < s.Columns {
-					s.clearWidePairAt(line, s.Cursor.Col+1)
-				}
-				line[s.Cursor.Col] = s.cellOf(cluster, sid)
-				if s.Cursor.Col+1 < s.Columns {
-					line[s.Cursor.Col+1] = gcell{style: sid}
-				}
-			case width == 0 && isCombiningCluster(cluster):
-				// The mark joins the cell before, which keeps its style and wrap.
-				if s.Cursor.Col > 0 {
-					prev := line[s.Cursor.Col-1]
-					line[s.Cursor.Col-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
-				} else if s.Cursor.Row > 0 {
-					prevLine := s.rows[s.Cursor.Row-1]
-					prev := prevLine[s.Columns-1]
-					prevLine[s.Columns-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
-				}
-			default:
-				return false
-			}
+	// A width-2 cluster that can't fit in the single remaining column wraps
+	// to the next line (autowrap), blanking the last cell — xterm does not
+	// split a wide char across the right edge. Guarded so a 1-column screen
+	// can't loop, and only when a row below exists to wrap into without
+	// scrolling (on the last line the existing deferred-wrap applies, which
+	// the pyte conformance suite encodes for the line-end case).
+	if width == 2 && s.Cursor.Col == limit && s.Cursor.Col > 0 &&
+		s.Cursor.Row < s.Lines-1 && s.isModeSet(ModeDECAWM) {
+		s.rows[s.Cursor.Row][s.Cursor.Col] = s.blankCell().setEmpty(true) // the glyph goes on the next row whole
+		s.markWrapped(s.Cursor.Row, limit)
+		s.CarriageReturn()
+		s.LineFeed()
+	}
 
-			if width > 0 {
-				s.lastDrawn = cluster
-				nextCol := s.Cursor.Col + width
-				if nextCol > limit {
-					if s.isModeSet(ModeDECAWM) {
-						s.wrapNext = true
-						s.Cursor.Col = limit + 1
-						continue
-					}
-					// Autowrap off: the cursor stays on the margin column, as
-					// xterm's does, so the next character replaces the last one
-					// and an erase from the cursor takes it. (It used to sit one
-					// past the edge, where an erase touched nothing, which hid
-					// a renderer that erased after painting the last column.)
-					s.Cursor.Col = limit
-				} else {
-					s.Cursor.Col = nextCol
-				}
+	if s.isModeSet(ModeIRM) && width > 0 {
+		s.InsertCharacters(width)
+	}
+
+	line := s.rows[s.Cursor.Row]
+	switch {
+	case width == 1:
+		s.clearWidePairAt(line, s.Cursor.Col)
+		line[s.Cursor.Col] = s.cellOf(cluster, sid)
+	case width == 2:
+		s.clearWidePairAt(line, s.Cursor.Col)
+		if s.Cursor.Col+1 < s.Columns {
+			s.clearWidePairAt(line, s.Cursor.Col+1)
+		}
+		line[s.Cursor.Col] = s.cellOf(cluster, sid)
+		if s.Cursor.Col+1 < s.Columns {
+			line[s.Cursor.Col+1] = gcell{style: sid}
+		}
+	case width == 0 && isCombiningCluster(cluster):
+		// The mark joins the cell before, which keeps its style and wrap.
+		if s.Cursor.Col > 0 {
+			prev := line[s.Cursor.Col-1]
+			line[s.Cursor.Col-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
+		} else if s.Cursor.Row > 0 {
+			prevLine := s.rows[s.Cursor.Row-1]
+			prev := prevLine[s.Columns-1]
+			prevLine[s.Columns-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
+		}
+	default:
+		return false
+	}
+
+	if width > 0 {
+		s.lastDrawn = cluster
+		nextCol := s.Cursor.Col + width
+		if nextCol > limit {
+			if s.isModeSet(ModeDECAWM) {
+				s.wrapNext = true
+				s.Cursor.Col = limit + 1
+				return true
 			}
+			// Autowrap off: the cursor stays on the margin column, as
+			// xterm's does, so the next character replaces the last one
+			// and an erase from the cursor takes it. (It used to sit one
+			// past the edge, where an erase touched nothing, which hid
+			// a renderer that erased after painting the last column.)
+			s.Cursor.Col = limit
+		} else {
+			s.Cursor.Col = nextCol
 		}
 	}
 	return true
@@ -592,18 +617,17 @@ func init() {
 	}
 }
 
-// drawASCII draws data when every byte is printable ASCII and the screen is
-// in a state where each byte is one narrow cell: the active charset maps
-// ASCII to itself and insert mode is off. Anything else returns false, and
-// Draw takes the general path, which is the one that defines what a draw
-// does; this one must match it cell for cell.
-func (s *Screen) drawASCII(data string) {
+// drawASCII draws data, every byte of it printable ASCII, in style sid,
+// when the screen is in a state where each byte is one narrow cell: the
+// active charset maps ASCII to itself and insert mode is off. Draw sees to
+// that; the general path defines what a draw does, and this one must match
+// it cell for cell.
+func (s *Screen) drawASCII(data string, sid uint16) {
 	limit := s.Columns - 1
 	if s.isModeSet(ModeDECLRMM) {
 		limit = s.rightMargin
 	}
 	autowrap := s.isModeSet(ModeDECAWM)
-	sid := s.styleID(s.Cursor.Attr)
 	line := s.rows[s.Cursor.Row]
 	for i := 0; i < len(data); i++ {
 		if s.wrapNext {
@@ -3293,6 +3317,9 @@ func (s *Screen) syncOutputCleared(was bool) {
 }
 
 func (s *Screen) translate(data string) string {
+	if s.charsetIdentity() {
+		return data
+	}
 	mapping := s.G0
 	if s.Charset == 1 {
 		mapping = s.G1

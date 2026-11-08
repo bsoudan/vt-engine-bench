@@ -171,13 +171,13 @@ func (s *Screen) text(g gcell) string {
 }
 
 // widthOf is the columns g's text takes under the screen's width policy:
-// one for ASCII, none for no text, and for the rest what the policy says
-// of it, remembered per text.
+// one for printable ASCII, none for no text, and for the rest what the
+// policy says of it, remembered per text.
 func (s *Screen) widthOf(g gcell) int {
 	if g.text == 0 {
 		return 0
 	}
-	if g.flags&flagGrapheme == 0 && g.text < 0x80 {
+	if g.flags&flagGrapheme == 0 && g.text >= 0x20 && g.text < 0x7f {
 		return 1
 	}
 	key := gcell{text: g.text, flags: g.flags & flagGrapheme}
