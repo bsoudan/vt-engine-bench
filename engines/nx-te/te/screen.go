@@ -157,7 +157,7 @@ type Screen struct {
 	// hot is the state of the modes the hot paths read — for each cell
 	// drawn, each row scrolled, each blank cell made — as booleans, kept
 	// with Mode by modesChanged, so those paths don't look them up in it.
-	hot struct{ lrmm, om, awm, irm, scnm bool }
+	hot struct{ lrmm, om, awm, irm, scnm, lnm bool }
 }
 
 // IsAltScreenActive reports whether the alternate screen buffer is active.
@@ -3330,6 +3330,8 @@ func (s *Screen) isModeSet(mode int) bool {
 		return s.hot.irm
 	case ModeDECSCNM:
 		return s.hot.scnm
+	case ModeLNM:
+		return s.hot.lnm
 	}
 	_, ok := s.Mode[mode]
 	return ok
@@ -3344,6 +3346,7 @@ func (s *Screen) modesChanged() {
 	s.hot.awm = has(ModeDECAWM)
 	s.hot.irm = has(ModeIRM)
 	s.hot.scnm = has(ModeDECSCNM)
+	s.hot.lnm = has(ModeLNM)
 }
 
 // scrolled tells Scrolled of a scroll about to happen, if it is set.

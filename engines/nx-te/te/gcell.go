@@ -56,6 +56,8 @@ type cellTables struct {
 	graphemeIDs map[string]uint32
 	widths      map[gcell]int8 // the width of each text seen (widthOf)
 	compacting  bool
+	lastAttr    Attr   // the Attr styleID was last asked about, and
+	lastID      uint16 // its index; 0 when none yet
 	// guarded says a style in the table protects its cells from an erase
 	// (DECSCA's or ISO 6429's protection). Every cell's style is in the
 	// table, so until one does, no cell on the screen is protected and an
@@ -67,13 +69,19 @@ type cellTables struct {
 // being 16 bits.
 const maxStyles = 1 << 16
 
-// styleID is the index of a in the style table, added if new.
+// styleID is the index of a in the style table, added if new. The last
+// Attr asked about is remembered with its index: a program draws in one
+// style for a while, and comparing 40 bytes beats hashing them.
 func (s *Screen) styleID(a Attr) uint16 {
 	if a == (Attr{}) {
 		return 0
 	}
 	t := &s.tables
+	if a == t.lastAttr && t.lastID != 0 {
+		return t.lastID
+	}
 	if id, ok := t.styleIDs[a]; ok {
+		t.lastAttr, t.lastID = a, id
 		return id
 	}
 	if t.styleIDs == nil {
@@ -90,6 +98,7 @@ func (s *Screen) styleID(a Attr) uint16 {
 	id := uint16(len(t.styles))
 	t.styles = append(t.styles, a)
 	t.styleIDs[a] = id
+	t.lastAttr, t.lastID = a, id
 	if a.Protected || a.ISOProtected {
 		t.guarded = true
 	}

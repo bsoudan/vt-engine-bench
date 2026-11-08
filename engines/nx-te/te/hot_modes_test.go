@@ -7,7 +7,7 @@ import "testing"
 // set and a reset, ANSI and private, a save and restore, a soft reset, a
 // full reset, DECCOLM's side effects, and a state restored from a snapshot.
 func TestHotModesFollowMap(t *testing.T) {
-	hot := []int{ModeDECLRMM, ModeDECOM, ModeDECAWM, ModeIRM, ModeDECSCNM}
+	hot := []int{ModeDECLRMM, ModeDECOM, ModeDECAWM, ModeIRM, ModeDECSCNM, ModeLNM}
 	check := func(s *Screen, after string) {
 		t.Helper()
 		for _, m := range hot {
@@ -27,12 +27,14 @@ func TestHotModesFollowMap(t *testing.T) {
 		s.SetMode([]int{m}, true)
 		check(s, "DECSET again")
 	}
-	s.SetMode([]int{4}, false)
-	check(s, "SM 4")
-	s.ResetMode([]int{4}, false)
-	check(s, "RM 4")
-	s.SetMode([]int{4}, false)
-	check(s, "SM 4 again")
+	for _, m := range []int{4, 20} {
+		s.SetMode([]int{m}, false)
+		check(s, "SM")
+		s.ResetMode([]int{m}, false)
+		check(s, "RM")
+		s.SetMode([]int{m}, false)
+		check(s, "SM again")
+	}
 	s.SaveModes([]int{69, 6, 7, 5})
 	s.ResetMode([]int{69, 6, 7, 5}, true)
 	check(s, "DECRST of saved")
