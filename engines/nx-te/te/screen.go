@@ -458,11 +458,15 @@ func (s *Screen) asciiDrawable() bool {
 // it does not draw, with the rest of data undrawn.
 func (s *Screen) drawGeneral(data string) bool {
 	data = s.translate(data)
-	graphemes := uniseg.NewGraphemes(data)
-	for graphemes.Next() {
+	// Grapheme clusters only: uniseg's Graphemes iterator would also work out
+	// word, sentence and line breaks for every step, which nothing here reads.
+	state := -1
+	for len(data) > 0 {
+		var grapheme string
+		grapheme, data, _, state = uniseg.FirstGraphemeClusterInString(data, state)
 		// A cluster the terminal draws as several glyphs (a ZWJ sequence it does
 		// not join, a modifier beside its base) is drawn here as those glyphs.
-		for _, cluster := range s.Widths.Pieces(graphemes.Str()) {
+		for _, cluster := range s.Widths.Pieces(grapheme) {
 			width := s.Widths.Width(cluster)
 			limit := s.Columns - 1
 			if s.isModeSet(ModeDECLRMM) {
