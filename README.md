@@ -66,6 +66,19 @@ The same three runs ([CSV](results/2026-11-08-headless-alpha-nx-te.csv)) after t
 | TUI redraw, ms | 6.04 | **4.22** | 7.09 | 44.92 | 25.03 |
 | tmux client (repeated recording), ms | **3.60** | 7.49 | 22.86 | 231.20 | 35.26 |
 
+### Recorded run with eight-byte cells (same machine, 2026-11-08)
+
+The same three runs ([CSV](results/2026-11-08-headless-alpha-nx-te-cells.csv)) after the next twelve `engines/nx-te` commits, which take Ghostty's cell layout: the screen stores each cell as eight bytes (a codepoint or an index into a per-screen table of multi-codepoint clusters, an index into a per-screen table of distinct attributes, and the wrap and empty flags), and `cell.Cell` is translated at the edges, so the tests, snapshots and deltas see no change. The tables carry the hints Ghostty keeps per row: no erase reads a cell until some style on the screen protects one, a draw works out its style's index once, the width of each character is remembered, and a character that is a grapheme cluster on its own (most non-ASCII text) is drawn without the segmenter. The remaining commits draw ASCII a row at a time, hand `Draw` a view of the input rather than a copy, and trim the CSI and SGR paths. Allocation per run falls to about a thousand objects.
+
+| Workload | alacritty_terminal | Ghostty main | vt100 | wezterm-term | nxterm te (nx-te) |
+|---|---:|---:|---:|---:|---:|
+| plain scroll, ms | 12.97 | **3.17** | 18.90 | 46.42 | 6.12 |
+| ANSI scroll, ms | **9.31** | 19.97 | 15.32 | 25.35 | 10.45 |
+| TUI redraw, ms | 6.06 | **4.24** | 7.13 | 45.19 | 10.00 |
+| tmux client (repeated recording), ms | **3.58** | 7.42 | 22.77 | 229.66 | 7.34 |
+
+te now leads Ghostty on the 256-color scroll and matches it on the tmux recording, and trails it by two times on plain scroll and the TUI redraw; it is within two times of Alacritty everywhere but the tmux recording. What remains in the profiles is spread thin: hashing a 40-byte attribute to find its style index when the color changes every line, a byte-at-a-time CSI state machine against Ghostty's table-driven one and SIMD scan, and the memory moves of scrolling itself.
+
 ## GPUI window capture (Apple M1 Pro, 2026-10-08)
 
 Run `bash scripts/run_gpui_bench.sh` from a logged-in macOS desktop with Screen Recording permission (Linux: see below). It builds a **single shared GPUI text renderer** for all four engines, launches each in a visible window, and uses ScreenCaptureKit to observe a color marker changing alongside the rendered 120×40 tmux viewport. It feeds the committed tmux recording in 80 chunks at ~16 ms intervals, then dispatches 40 synthetic GPUI key events at ~40 ms intervals. The app checks that all four engines end with the same expected tmux viewport; a run is rejected if capture loses too many updates or timestamps do not align. No PTY, text attributes, cursor painting, hardware keyboard, or glyph-by-glyph screen validation is included in this rendering harness.
