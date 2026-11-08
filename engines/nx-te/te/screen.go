@@ -380,9 +380,85 @@ func (s *Screen) clearWidePairAt(line []Cell, col int) {
 
 // Draw renders text at the current cursor position.
 func (s *Screen) Draw(data string) {
+	if !asciiFastPath {
+		s.drawGeneral(data)
+		return
+	}
+	ascii := s.asciiDrawable()
+	for data != "" {
+		if ascii {
+			if n := asciiRun(data); n > 0 {
+				s.drawASCII(data[:n])
+				data = data[n:]
+				continue
+			}
+		}
+		n := generalRun(data)
+		if !s.drawGeneral(data[:n]) {
+			return
+		}
+		data = data[n:]
+	}
+}
+
+// asciiRun is the length of data's leading run of printable ASCII bytes
+// that drawASCII may take: when the run ends at a byte that is not ASCII,
+// its last byte stays with what follows, which may be a combining mark
+// that joins it into one cluster.
+func asciiRun(data string) int {
+	n := 0
+	for n < len(data) {
+		if b := data[n]; b < 0x20 || b >= 0x7f {
+			break
+		}
+		n++
+	}
+	if n < len(data) && n > 0 && data[n] >= 0x80 {
+		n--
+	}
+	return n
+}
+
+// generalRun is the length of data's leading run for the general path: whole
+// grapheme clusters, up to the first that is one printable ASCII byte on its
+// own, where an ASCII run can begin.
+func generalRun(data string) int {
+	n := 0
+	state := -1
+	rest := data
+	for len(rest) > 0 {
+		var cluster string
+		cluster, rest, _, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if n > 0 && len(cluster) == 1 && cluster[0] >= 0x20 && cluster[0] < 0x7f {
+			break
+		}
+		n += len(cluster)
+	}
+	return n
+}
+
+// asciiDrawable says the screen is in a state where each printable ASCII
+// byte is one narrow cell: the active charset maps ASCII to itself and
+// insert mode is off.
+func (s *Screen) asciiDrawable() bool {
+	mapping := s.G0
+	if s.Charset == 1 {
+		mapping = s.G1
+	}
+	for r := rune(0x20); r < 0x7f; r++ {
+		if mapping[r] != r {
+			return false
+		}
+	}
+	return !s.isModeSet(ModeIRM)
+}
+
+// drawGeneral is the general path: it defines what a draw does, and
+// drawASCII must match it cell for cell. False when it stopped at a cluster
+// it does not draw, with the rest of data undrawn.
+func (s *Screen) drawGeneral(data string) bool {
 	data = s.translate(data)
 	graphemes := uniseg.NewGraphemes(data)
-loop:
 	for graphemes.Next() {
 		// A cluster the terminal draws as several glyphs (a ZWJ sequence it does
 		// not join, a modifier beside its base) is drawn here as those glyphs.
@@ -446,7 +522,7 @@ loop:
 					prevLine[s.Columns-1] = Cell{Data: norm.NFC.String(prev.Data + cluster), Attr: prev.Attr, Wrapped: prev.Wrapped}
 				}
 			default:
-				break loop
+				return false
 			}
 
 			if width > 0 {
@@ -468,6 +544,65 @@ loop:
 					s.Cursor.Col = nextCol
 				}
 			}
+		}
+	}
+	return true
+}
+
+// asciiFastPath says Draw takes printable ASCII runs through drawASCII. Off,
+// every draw goes through the general path alone: the test that checks the
+// two agree (TestDrawASCIIMatchesGeneral) turns it off for its reference.
+var asciiFastPath = true
+
+// asciiCell is each printable ASCII byte as a one-byte string, so a cell
+// drawn from it allocates nothing.
+var asciiCell [128]string
+
+func init() {
+	for i := range asciiCell {
+		asciiCell[i] = string(rune(i))
+	}
+}
+
+// drawASCII draws data when every byte is printable ASCII and the screen is
+// in a state where each byte is one narrow cell: the active charset maps
+// ASCII to itself and insert mode is off. Anything else returns false, and
+// Draw takes the general path, which is the one that defines what a draw
+// does; this one must match it cell for cell.
+func (s *Screen) drawASCII(data string) {
+	limit := s.Columns - 1
+	if s.isModeSet(ModeDECLRMM) {
+		limit = s.rightMargin
+	}
+	autowrap := s.isModeSet(ModeDECAWM)
+	line := s.Buffer[s.Cursor.Row]
+	for i := 0; i < len(data); i++ {
+		if s.wrapNext {
+			s.wrapNext = false
+			s.markWrapped(s.Cursor.Row, limit)
+			s.CarriageReturn()
+			s.LineFeed()
+			line = s.Buffer[s.Cursor.Row]
+		}
+		if s.Cursor.Col > limit {
+			s.Cursor.Col = limit
+		}
+		col := s.Cursor.Col
+		if d := line[col].Data; len(d) != 1 || d[0] >= 0x80 {
+			s.clearWidePairAt(line, col) // the cell may be half of a wide glyph
+		}
+		cluster := asciiCell[data[i]]
+		line[col] = Cell{Data: cluster, Attr: s.Cursor.Attr}
+		s.lastDrawn = cluster
+		if next := col + 1; next > limit {
+			if autowrap {
+				s.wrapNext = true
+				s.Cursor.Col = limit + 1
+			} else {
+				s.Cursor.Col = limit
+			}
+		} else {
+			s.Cursor.Col = next
 		}
 	}
 }
