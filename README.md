@@ -42,6 +42,18 @@ Only the **specific fixtures** pass; this is not a complete VT conformance suite
 
 **Do not select a GPUI terminal core on these numbers alone.** All four pass the bounded core fixtures; none is proven the fastest rendered terminal. Ghostty leads plain output and synthetic TUI redraws; Alacritty leads this recorded tmux stream and ANSI output.
 
+### Recorded run (Intel i3-4130T, NixOS, GNOME desktop idle, release build, 2026-11-07)
+
+Three runs of `cargo run --release -- --csv results/2026-11-07-headless-alpha.csv --run N`, the table by `python3 scripts/summarize_headless.py` on that [CSV](results/2026-11-07-headless-alpha.csv): the median of the three per-run medians. The fifth column is nxterm's `te` engine (v0.5.1) through `crates/nxterm-vt`. A 2.9 GHz Haswell core is about twice as slow as the M1 Pro above on every engine; compare columns within a row, not with the macOS table.
+
+| Workload | alacritty_terminal | Ghostty main | vt100 | wezterm-term | nxterm te |
+|---|---:|---:|---:|---:|---:|
+| plain scroll, ms | 12.94 | **3.20** | 18.75 | 46.17 | 453.33 |
+| ANSI scroll, ms | **9.30** | 19.95 | 15.25 | 25.14 | 260.42 |
+| TUI redraw, ms | 6.04 | **4.21** | 7.24 | 44.75 | 108.22 |
+| tmux client (repeated recording), ms | **3.58** | 7.41 | 22.94 | 230.05 | 243.39 |
+
+nxterm's engine passes the same fixtures but parses at about 1.7 MiB/s on the plain scroll, ten to a hundred times slower than the Rust and Zig engines. That is the engine, not the shim: fed from Go directly, without cgo, the same workload takes 437 ms with a 1000-line scrollback and 380 ms with none. It is a pure-Go emulator written for a multiplexer that cuts a pty's output into frames at most every 16 ms, where this throughput is far above what a pty delivers; the comparison is of parse cost, as for the others.
 
 ## GPUI window capture (Apple M1 Pro, 2026-10-08)
 
