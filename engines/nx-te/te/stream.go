@@ -119,6 +119,7 @@ type Stream struct {
 	state           parserState
 	params          []int
 	current         []byte // the parameter being read, its digits and colons so far; reused
+	hasColon        bool   // a parameter of this sequence has sub-parameters (a colon)
 	private         bool
 	csiPrefix       rune
 	csiIntermediate rune
@@ -620,6 +621,7 @@ func (st *Stream) handleCSI(ch rune) error {
 		// into the current parameter string; appendParam keeps the raw string
 		// and expandSGRParams interprets the colon groups for SGR.
 		st.current = append(st.current, byte(ch))
+		st.hasColon = true
 		return nil
 	}
 	if ch == ';' {
@@ -855,6 +857,7 @@ func (st *Stream) resetCSI() {
 	st.params = st.params[:0]
 	st.paramStrings = st.paramStrings[:0]
 	st.current = st.current[:0]
+	st.hasColon = false
 	st.private = false
 	st.csiPrefix = 0
 	st.csiIntermediate = 0
@@ -898,6 +901,9 @@ func (st *Stream) appendParam() {
 //
 // Falls back to the leading value for any other colon group so nothing leaks.
 func (st *Stream) expandSGRParams(params []int) []int {
+	if !st.hasColon {
+		return params // no sub-parameters in this sequence: nothing to expand
+	}
 	hasColon := false
 	for _, s := range st.paramStrings {
 		if strings.ContainsRune(s, ':') {

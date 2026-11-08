@@ -1,5 +1,7 @@
 package te
 
+import "strings"
+
 // StreamState is a Stream's parser state: where it is in a sequence or a
 // character not yet whole, so a stream restored from it reads the rest as
 // the one it was taken from would (ScrollbackState.Stream).
@@ -64,6 +66,10 @@ func (st *Stream) UnmarshalState(s *StreamState) {
 	st.strBuf.Reset()
 	st.strBuf.WriteString(s.Str)
 	st.paramStrings = append([]string(nil), s.ParamStrings...)
+	st.hasColon = strings.ContainsRune(s.Current, ':')
+	for _, p := range s.ParamStrings {
+		st.hasColon = st.hasColon || strings.ContainsRune(p, ':')
+	}
 	st.pendingBytes = append([]byte(nil), s.PendingBytes...)
 	st.use8BitControls = s.Use8BitControls
 	st.useUTF8 = !s.NotUTF8
