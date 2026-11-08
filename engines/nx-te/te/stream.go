@@ -1,0 +1,1243 @@
+package te
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+// ErrNoListener is returned when no event handler is attached.
+var ErrNoListener = errors.New("listener is not set")
+
+// EventHandler defines callbacks used by Stream to update a screen.
+type EventHandler interface {
+	Bell()
+	Backspace()
+	Tab()
+	LineFeed()
+	NextLine()
+	CarriageReturn()
+	ShiftOut()
+	ShiftIn()
+	Reset()
+	Index()
+	ReverseIndex()
+	SetTabStop()
+	StartProtectedArea()
+	EndProtectedArea()
+	SetCharacterProtection(mode int)
+	ClearTabStop(how ...int)
+	SaveCursor()
+	RestoreCursor()
+	SaveCursorDEC()
+	RestoreCursorDEC()
+	AlignmentDisplay()
+	InsertCharacters(count ...int)
+	CursorUp(count ...int)
+	CursorDown(count ...int)
+	CursorForward(count ...int)
+	CursorBack(count ...int)
+	CursorDown1(count ...int)
+	CursorUp1(count ...int)
+	CursorToColumn(column ...int)
+	CursorToColumnAbsolute(column ...int)
+	CursorPosition(params ...int)
+	CursorBackTab(count ...int)
+	CursorForwardTab(count ...int)
+	ScrollUp(count ...int)
+	ScrollDown(count ...int)
+	RepeatLast(count ...int)
+	EraseInDisplay(how int, private bool, rest ...int)
+	EraseInLine(how int, private bool, rest ...int)
+	InsertLines(count ...int)
+	DeleteLines(count ...int)
+	DeleteCharacters(count ...int)
+	EraseCharacters(count ...int)
+	ReportDeviceAttributes(mode int, private bool, prefix rune, rest ...int)
+	CursorToLine(line ...int)
+	ReportDeviceStatus(mode int, private bool, prefix rune, rest ...int)
+	ReportTerminalVersion()
+	ReportMode(mode int, private bool)
+	RequestStatusString(query string)
+	SoftReset()
+	SaveModes(modes []int)
+	RestoreModes(modes []int)
+	ForwardIndex()
+	BackIndex()
+	InsertColumns(count int)
+	DeleteColumns(count int)
+	EraseRectangle(top, left, bottom, right int)
+	SelectiveEraseRectangle(top, left, bottom, right int)
+	FillRectangle(ch rune, top, left, bottom, right int)
+	CopyRectangle(srcTop, srcLeft, srcBottom, srcRight, dstTop, dstLeft int)
+	SetMargins(params ...int)
+	SetLeftRightMargins(left, right int)
+	SelectGraphicRendition(attrs []int, private bool)
+	Draw(data string)
+	Debug(params ...interface{})
+	SetMode(modes []int, private bool)
+	ResetMode(modes []int, private bool)
+	DefineCharset(code, mode string)
+	SetTitle(param string)
+	SetIconName(param string)
+	SetSelectionData(selection, data string)
+	QuerySelectionData(selection string)
+	Notify(n Notification)
+	SetColor(index int, value string)
+	QueryColor(index int)
+	ResetColor(index int, all bool)
+	SetDynamicColor(index int, value string)
+	QueryDynamicColor(index int)
+	SetSpecialColor(index int, value string)
+	QuerySpecialColor(index int)
+	ResetSpecialColor(index int, all bool)
+	ResetDynamicColor(index int, all bool)
+	SetTitleMode(params []int, reset bool)
+	SetConformance(level int, sevenBit int)
+	WindowOp(params []int)
+	RequestTermcap(query string)
+	EraseInDisplaySelective(how int)
+	SetCursorStyle(style int)
+	SetActiveStatusDisplay(mode int)
+	// isModeSet says whether a mode is set: the stream reads CSI s as
+	// DECSLRM while left and right margins are on (DECLRMM), and as a
+	// cursor save otherwise.
+	isModeSet(mode int) bool
+}
+
+// Stream parses escape sequences and dispatches events.
+type Stream struct {
+	listener        EventHandler
+	useUTF8         bool
+	use8BitControls bool
+	state           parserState
+	params          []int
+	current         string
+	private         bool
+	csiPrefix       rune
+	csiIntermediate rune
+	pendingQuote    bool
+	takingText      bool
+	oscEsc          bool
+	strBuf          strings.Builder
+	paramStrings    []string
+	// pendingBytes holds an incomplete trailing UTF-8 sequence carried over
+	// from the previous FeedBytes call so a rune split across read-chunk
+	// boundaries isn't decoded as mojibake. Bounded to <4 bytes.
+	pendingBytes []byte
+	// kitty is the OSC 99 notification whose chunks are coming (d=0), nil
+	// with none (notifyKitty).
+	kitty *Notification
+}
+
+type parserState int
+
+const (
+	stateGround parserState = iota
+	stateEscape
+	stateCSI
+	stateSharp
+	stateOSC
+	stateDCS
+	stateAPC
+	statePM
+	stateSOS
+	stateCharset
+	stateEscapePercent
+	stateEscapeSpace
+	stateEscapeIntermediate
+)
+
+// maxStringPayload caps the OSC/DCS string buffer so a long or never-terminated
+// control string (e.g. cat-ing a binary that contains ESC ]) can't grow memory
+// without bound. 512KB is generous for legitimate OSC use (titles, OSC 52
+// clipboard); excess bytes are dropped until the string terminator.
+const maxStringPayload = 1 << 19
+
+// appendStringPayload accumulates one rune of an OSC/DCS string in O(1)
+// amortized time (a strings.Builder, not per-rune string concat), up to the cap.
+func (st *Stream) appendStringPayload(ch rune) {
+	if st.strBuf.Len() < maxStringPayload {
+		st.strBuf.WriteRune(ch)
+	}
+}
+
+// NewStream creates a Stream for the provided event handler.
+func NewStream(screen EventHandler) *Stream {
+	st := &Stream{useUTF8: true}
+	if screen != nil {
+		st.Attach(screen)
+	}
+	return st
+}
+
+// Attach registers an event handler with the stream.
+func (st *Stream) Attach(screen EventHandler) {
+	st.listener = screen
+	st.state = stateGround
+	st.params = nil
+	st.current = ""
+	st.private = false
+	st.csiPrefix = 0
+	st.csiIntermediate = 0
+	st.pendingQuote = false
+	st.strBuf.Reset()
+	st.takingText = false
+	st.oscEsc = false
+	st.use8BitControls = false
+	st.pendingBytes = nil
+	st.strBuf.Reset()
+	st.paramStrings = nil
+}
+
+// Detach removes an event handler from the stream.
+func (st *Stream) Detach(screen EventHandler) {
+	if st.listener == screen {
+		st.listener = nil
+	}
+}
+
+// Feed processes terminal input.
+func (st *Stream) Feed(data string) (err error) {
+	return st.FeedBytes([]byte(data))
+}
+
+// FeedBytes processes a byte slice of terminal input.
+func (st *Stream) FeedBytes(data []byte) (err error) {
+	if st.listener == nil {
+		return ErrNoListener
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			st.state = stateGround
+			st.resetCSI()
+			st.oscEsc = false
+			st.pendingBytes = nil
+			st.strBuf.Reset()
+			err = fmt.Errorf("handler panic: %v", r)
+		}
+	}()
+
+	// Prepend any incomplete trailing UTF-8 bytes carried from last call.
+	if len(st.pendingBytes) > 0 {
+		combined := make([]byte, 0, len(st.pendingBytes)+len(data))
+		combined = append(combined, st.pendingBytes...)
+		combined = append(combined, data...)
+		data = combined
+		st.pendingBytes = st.pendingBytes[:0]
+	}
+
+	var textBuf []rune
+	flush := func() {
+		if len(textBuf) > 0 {
+			st.listener.Draw(string(textBuf))
+			textBuf = textBuf[:0]
+		}
+	}
+
+	for i := 0; i < len(data); {
+		b := data[i]
+		var ch rune
+		size := 1
+		if b < 0x80 {
+			ch = rune(b)
+		} else if b >= 0xC0 {
+			if st.useUTF8 && !utf8.FullRune(data[i:]) {
+				// Incomplete trailing multibyte sequence — carry the rest to
+				// the next FeedBytes call rather than mangling it now.
+				st.pendingBytes = append(st.pendingBytes[:0], data[i:]...)
+				break
+			}
+			r, n := utf8.DecodeRune(data[i:])
+			if r != utf8.RuneError || n > 1 {
+				ch = r
+				size = n
+			} else if st.useUTF8 {
+				ch = utf8.RuneError
+			} else {
+				ch = rune(b)
+			}
+		} else if st.useUTF8 {
+			// A byte that isn't UTF-8 is drawn as U+FFFD, as other terminals
+			// do, and never read as an 8-bit C1 control: a stray 0x90 in a
+			// Latin-1 file would open a DCS that swallows what follows. C1s
+			// in UTF-8 come encoded (C2 9B) and are decoded above.
+			ch = utf8.RuneError
+		} else {
+			ch = rune(b)
+		}
+
+		if st.isPlainText(ch) && st.state == stateGround {
+			textBuf = append(textBuf, ch)
+			i += size
+			continue
+		}
+		flush()
+		if err := st.feedRune(ch); err != nil {
+			return err
+		}
+		i += size
+	}
+	// A trailing ' (CSI Pn ') is the complete HPA sequence; dispatch it at the
+	// end of input. ' is overloaded as both the HPA final byte and the
+	// DECIC/DECDC intermediate, so this favors HPA — a DECIC split exactly at
+	// the ' across a FeedBytes boundary is the rare casualty (see #32).
+	if st.state == stateCSI && st.pendingQuote {
+		st.pendingQuote = false
+		params := st.params
+		st.state = stateGround
+		st.dispatchCSI('\'', params)
+		st.resetCSI()
+	}
+	flush()
+	return nil
+}
+
+// abortSequence cancels any in-progress control sequence and returns to ground,
+// discarding partial CSI/OSC/DCS state. Used for the CAN/SUB anywhere-aborts.
+func (st *Stream) abortSequence() {
+	st.state = stateGround
+	st.resetCSI()
+	st.oscEsc = false
+	st.strBuf.Reset()
+}
+
+func (st *Stream) feedRune(ch rune) error {
+	// CAN and SUB abort any in-progress control sequence from any non-ground
+	// state and return to ground, rather than being swallowed into a string.
+	// SUB additionally displays a substitution character (Williams parser);
+	// CAN displays nothing. xterm resynchronizes here.
+	if (ch == 0x18 || ch == 0x1a) && st.state != stateGround {
+		st.abortSequence()
+		if ch == 0x1a {
+			st.listener.Draw(string(ch))
+		}
+		return nil
+	}
+	switch st.state {
+	case stateGround:
+		return st.handleGround(ch)
+	case stateEscape:
+		return st.handleEscape(ch)
+	case stateSharp:
+		st.state = stateGround
+		if ch == '8' {
+			st.listener.AlignmentDisplay()
+		}
+		return nil
+	case stateCharset:
+		st.state = stateGround
+		if st.useUTF8 && !utf8SafeCharset(ch) {
+			// In UTF-8 mode honor only the sets that don't remap the >=0x80
+			// range (DEC Special Graphics for line drawing, and ASCII/Latin).
+			// The IBM-PC/VAX sets would corrupt decoded multibyte text, and
+			// xterm ignores them in UTF-8 mode.
+			return nil
+		}
+		st.listener.DefineCharset(string(ch), st.current)
+		return nil
+	case stateEscapePercent:
+		st.state = stateGround
+		st.SelectOtherCharset(string(ch))
+		return nil
+	case stateCSI:
+		return st.handleCSI(ch)
+	case stateOSC:
+		return st.handleOSC(ch)
+	case stateDCS, stateAPC, statePM, stateSOS:
+		return st.handleString(ch)
+	case stateEscapeSpace:
+		st.state = stateGround
+		switch ch {
+		case 'F':
+			st.use8BitControls = false
+		case 'G':
+			st.use8BitControls = true
+		}
+		return nil
+	case stateEscapeIntermediate:
+		if ch >= ' ' && ch <= '/' {
+			return nil
+		}
+		st.state = stateGround
+		if ch == '\x1b' {
+			st.state = stateEscape
+		}
+		return nil
+	default:
+		st.state = stateGround
+	}
+	return nil
+}
+
+func (st *Stream) handleGround(ch rune) error {
+	switch ch {
+	case '\x07':
+		st.listener.Bell()
+	case '\x08':
+		st.listener.Backspace()
+	case '\t':
+		st.listener.Tab()
+	case '\n', '\x0b', '\x0c':
+		st.listener.LineFeed()
+	case '\r':
+		st.listener.CarriageReturn()
+	case '\x0e':
+		// SO/SI (LS1/LS0) select G1/G0 into GL. Honored even in UTF-8 mode so
+		// the DEC Special Graphics set (terminfo smacs=^N / rmacs=^O) works;
+		// the default G0/G1 don't remap the >=0x80 range, so decoded multibyte
+		// text is unaffected.
+		st.listener.ShiftOut()
+	case '\x0f':
+		st.listener.ShiftIn()
+	case '\x1b':
+		st.state = stateEscape
+	case '\x84':
+		st.listener.Index()
+	case '\x85':
+		st.listener.LineFeed()
+		st.listener.CarriageReturn()
+	case '\x88':
+		st.listener.SetTabStop()
+	case '\x96':
+		st.listener.StartProtectedArea()
+	case '\x97':
+		st.listener.EndProtectedArea()
+	case '\x8d':
+		st.listener.ReverseIndex()
+	case '\x90':
+		st.state = stateDCS
+		st.strBuf.Reset()
+		st.oscEsc = false
+	case '\x9a':
+		st.listener.ReportDeviceAttributes(0, true, '?')
+	case '\x98':
+		st.state = stateSOS
+	case '\x9b':
+		st.state = stateCSI
+		st.resetCSI()
+	case '\x9d':
+		st.state = stateOSC
+		st.strBuf.Reset()
+		st.oscEsc = false
+	case '\x9e':
+		st.state = statePM
+	case '\x9f':
+		st.state = stateAPC
+	case '\x00', '\x7f':
+		return nil
+	default:
+		st.listener.Draw(string(ch))
+	}
+	return nil
+}
+
+func (st *Stream) handleEscape(ch rune) error {
+	st.state = stateGround
+	switch ch {
+	case '[':
+		st.state = stateCSI
+		st.resetCSI()
+	case ']':
+		st.state = stateOSC
+		st.strBuf.Reset()
+		st.oscEsc = false
+	case 'P':
+		st.state = stateDCS
+		st.oscEsc = false
+		st.strBuf.Reset()
+	case '_':
+		st.state = stateAPC
+		st.oscEsc = false
+	case '^':
+		st.state = statePM
+		st.oscEsc = false
+	case 'X':
+		st.state = stateSOS
+		st.oscEsc = false
+	case '#':
+		st.state = stateSharp
+	case ' ':
+		st.state = stateEscapeSpace
+	case '%':
+		st.current = ""
+		st.state = stateEscapePercent
+	case '(', ')':
+		st.current = string(ch)
+		st.state = stateCharset
+	case '!', '"', '$', '&', '\'', '*', '+', ',', '-', '.', '/':
+		// The designations te doesn't keep (G2 and G3, the 96-character and
+		// multibyte sets) and the rest of ECMA-35's intermediates: consumed
+		// through their final, which would otherwise be drawn.
+		st.state = stateEscapeIntermediate
+	case '\x1b':
+		// ESC ESC abandons the first; the second begins the sequence. tmux's
+		// passthrough doubles the ESCs of what it wraps.
+		st.state = stateEscape
+	case 'c':
+		st.listener.Reset()
+	case 'D':
+		st.listener.Index()
+	case 'E':
+		st.listener.LineFeed()
+		st.listener.CarriageReturn()
+	case 'M':
+		st.listener.ReverseIndex()
+	case 'H':
+		st.listener.SetTabStop()
+	case 'V':
+		st.listener.StartProtectedArea()
+	case 'W':
+		st.listener.EndProtectedArea()
+	case '7':
+		st.listener.SaveCursorDEC()
+	case '8':
+		st.listener.RestoreCursorDEC()
+	case '6':
+		st.listener.BackIndex()
+	case '9':
+		st.listener.ForwardIndex()
+	case 'Z':
+		st.listener.ReportDeviceAttributes(0, true, '?')
+	default:
+		return nil
+	}
+	return nil
+}
+
+func (st *Stream) handleCSI(ch rune) error {
+	// Resolve a pending ' first (it carries across FeedBytes calls): '}' / '~'
+	// complete DECIC/DECDC, anything else means the ' was the HPA final and this
+	// byte begins the next sequence (handled in ground, e.g. ESC → new escape).
+	// This must run before the ESC-abort below so a deferred HPA isn't dropped
+	// by the ESC of a following sequence.
+	if st.pendingQuote {
+		st.pendingQuote = false
+		if ch == '}' || ch == '~' {
+			params := st.params
+			st.state = stateGround
+			st.dispatchCSI(ch, params)
+			st.resetCSI()
+			return nil
+		}
+		params := st.params
+		st.state = stateGround
+		st.dispatchCSI('\'', params)
+		st.resetCSI()
+		return st.handleGround(ch)
+	}
+	if ch == '\x1b' {
+		// ESC aborts the in-progress CSI and begins a new escape sequence.
+		st.resetCSI()
+		st.state = stateEscape
+		return nil
+	}
+	if ch == '?' {
+		st.private = true
+		st.csiPrefix = ch
+		return nil
+	}
+	// '<', '=', '>' are private parameter indicators per ECMA-48 §5.4.1.
+	// '?' is the only one we natively understand for SetMode/ResetMode/etc;
+	// the others (xterm modifyOtherKeys, kitty keyboard protocol, …) are
+	// recognized as prefixes so their full sequences are consumed and the
+	// trailing bytes don't leak into the ground state as plain text. The
+	// dispatchCSI gate below decides whether to act on each sequence.
+	if ch == '<' || ch == '=' || ch == '>' {
+		st.csiPrefix = ch
+		return nil
+	}
+	if ch == '\'' {
+		st.appendParam()
+		st.csiIntermediate = ch
+		st.pendingQuote = true
+		return nil
+	}
+	if ch >= ' ' && ch <= '/' {
+		st.csiIntermediate = ch
+		return nil
+	}
+	if ch >= '0' && ch <= '9' {
+		st.current += string(ch)
+		return nil
+	}
+	if ch == ':' {
+		// Colon introduces SGR sub-parameters (ITU/kitty form). Accumulate it
+		// into the current parameter string; appendParam keeps the raw string
+		// and expandSGRParams interprets the colon groups for SGR.
+		st.current += string(ch)
+		return nil
+	}
+	if ch == ';' {
+		st.appendParam()
+		return nil
+	}
+	if isControlInCSI(ch) {
+		st.dispatchControl(ch)
+		return nil
+	}
+	if ch == '$' {
+		st.csiIntermediate = ch
+		return nil
+	}
+	if ch == ' ' || ch == '>' {
+		return nil
+	}
+
+	st.appendParam()
+	params := st.params
+	st.state = stateGround
+	st.dispatchCSI(ch, params)
+	return nil
+}
+
+func (st *Stream) handleOSC(ch rune) error {
+	if st.oscEsc {
+		st.oscEsc = false
+		if ch == '\\' {
+			st.state = stateGround
+			st.finishOSC()
+			return nil
+		}
+		// ESC not part of ST: terminate the OSC and treat ch as the start of a
+		// new escape sequence instead of embedding the bytes in the string.
+		st.finishOSC()
+		st.state = stateEscape
+		return st.handleEscape(ch)
+	}
+	if ch == '\x07' || ch == '\x9c' {
+		st.state = stateGround
+		st.finishOSC()
+		return nil
+	}
+	if ch == '\x1b' {
+		st.oscEsc = true
+		return nil
+	}
+	st.appendStringPayload(ch)
+	return nil
+}
+
+func (st *Stream) handleString(ch rune) error {
+	if st.state == stateDCS {
+		if st.oscEsc {
+			st.oscEsc = false
+			if ch == '\\' {
+				st.state = stateGround
+				st.finishDCS()
+				return nil
+			}
+			// ESC not part of ST: terminate the DCS and start a new escape.
+			st.finishDCS()
+			st.state = stateEscape
+			return st.handleEscape(ch)
+		}
+		if ch == '\x07' || ch == '\x9c' {
+			st.state = stateGround
+			st.finishDCS()
+			return nil
+		}
+		if ch == '\x1b' {
+			st.oscEsc = true
+			return nil
+		}
+		st.appendStringPayload(ch)
+		return nil
+	}
+	if st.oscEsc {
+		st.oscEsc = false
+		if ch == '\\' {
+			st.state = stateGround
+			return nil
+		}
+		// ESC not part of ST: abort the ignored string and start a new escape.
+		st.state = stateEscape
+		return st.handleEscape(ch)
+	}
+	if ch == '\x07' || ch == '\x9c' {
+		st.state = stateGround
+		return nil
+	}
+	if ch == '\x1b' {
+		st.oscEsc = true
+	}
+	return nil
+}
+
+func (st *Stream) finishDCS() {
+	data := st.strBuf.String()
+	st.strBuf.Reset()
+	switch {
+	case strings.HasPrefix(data, "$q"):
+		st.listener.RequestStatusString(data[2:])
+	case strings.HasPrefix(data, "+q"):
+		st.listener.RequestTermcap(data[2:])
+	}
+}
+
+func (st *Stream) finishOSC() {
+	payload := st.strBuf.String()
+	st.strBuf.Reset()
+	if payload == "" {
+		return
+	}
+	chunks := strings.Split(payload, ";")
+	if len(chunks) == 0 {
+		return
+	}
+	option := chunks[0]
+	rest := strings.Join(chunks[1:], ";")
+	switch option {
+	case "0":
+		st.listener.SetIconName(rest)
+		st.listener.SetTitle(rest)
+	case "1":
+		st.listener.SetIconName(rest)
+	case "2":
+		st.listener.SetTitle(rest)
+	case "9": // a notification, iTerm2's (notify.go)
+		st.notifyITerm(rest)
+	case "777": // urxvt's
+		st.notifyURxvt(chunks[1:])
+	case "99": // kitty's
+		if len(chunks) > 2 {
+			st.notifyKitty(chunks[1], strings.Join(chunks[2:], ";"))
+		}
+	case "52":
+		selection := "s0"
+		if len(chunks) > 1 && chunks[1] != "" && chunks[1] != "?" {
+			selection = chunks[1]
+		}
+		if len(chunks) == 2 && chunks[1] == "?" {
+			st.listener.QuerySelectionData(selection)
+			return
+		}
+		if len(chunks) > 2 {
+			if chunks[2] == "?" {
+				st.listener.QuerySelectionData(selection)
+			} else {
+				st.listener.SetSelectionData(selection, chunks[2])
+			}
+		}
+	case "4":
+		for i := 1; i+1 < len(chunks); i += 2 {
+			idx, err := strconv.Atoi(chunks[i])
+			if err != nil {
+				continue
+			}
+			spec := chunks[i+1]
+			if spec == "?" {
+				st.listener.QueryColor(idx)
+				continue
+			}
+			st.listener.SetColor(idx, spec)
+		}
+	case "104":
+		if len(chunks) == 1 || chunks[1] == "" {
+			st.listener.ResetColor(0, true)
+			return
+		}
+		if idx, err := strconv.Atoi(chunks[1]); err == nil {
+			st.listener.ResetColor(idx, false)
+		}
+	case "10", "11":
+		idx, err := strconv.Atoi(option)
+		if err != nil {
+			break
+		}
+		if len(chunks) > 1 {
+			spec := chunks[1]
+			if spec == "?" {
+				st.listener.QueryDynamicColor(idx)
+				if option == "10" && len(chunks) > 2 && chunks[2] == "?" {
+					st.listener.QueryDynamicColor(11)
+				}
+				break
+			}
+			st.listener.SetDynamicColor(idx, spec)
+			if option == "10" && len(chunks) > 2 {
+				st.listener.SetDynamicColor(11, chunks[2])
+			}
+		}
+	case "110", "111", "112", "113", "114", "115", "116", "117", "118", "119":
+		idx, err := strconv.Atoi(option)
+		if err != nil {
+			break
+		}
+		st.listener.ResetDynamicColor(idx-100, false)
+	case "5":
+		for i := 1; i+1 < len(chunks); i += 2 {
+			idx, err := strconv.Atoi(chunks[i])
+			if err != nil {
+				continue
+			}
+			spec := chunks[i+1]
+			if spec == "?" {
+				st.listener.QuerySpecialColor(idx)
+				continue
+			}
+			st.listener.SetSpecialColor(idx, spec)
+		}
+	case "105":
+		if len(chunks) == 1 || chunks[1] == "" {
+			st.listener.ResetSpecialColor(0, true)
+			break
+		}
+		for i := 1; i < len(chunks); i++ {
+			if chunks[i] == "" {
+				continue
+			}
+			idx, err := strconv.Atoi(chunks[i])
+			if err != nil {
+				continue
+			}
+			st.listener.ResetSpecialColor(idx, false)
+		}
+	}
+	st.current = ""
+}
+
+func (st *Stream) resetCSI() {
+	st.params = st.params[:0]
+	st.paramStrings = st.paramStrings[:0]
+	st.current = ""
+	st.private = false
+	st.csiPrefix = 0
+	st.csiIntermediate = 0
+	st.pendingQuote = false
+}
+
+func (st *Stream) appendParam() {
+	value := 0
+	current := st.current
+	if current != "" {
+		for _, r := range current {
+			if r == ':' {
+				break // integer value is the part before the first sub-parameter
+			}
+			value = value*10 + int(r-'0')
+			if value > 9999 {
+				value = 9999
+				break
+			}
+		}
+	}
+	st.params = append(st.params, value)
+	st.paramStrings = append(st.paramStrings, current)
+	st.current = ""
+}
+
+// expandSGRParams flattens colon-grouped SGR sub-parameters (ITU/kitty form)
+// into the int sequence SelectGraphicRendition consumes. Params with no colon
+// pass through unchanged; colon groups are interpreted:
+//
+//	38:2:r:g:b / 38:2::r:g:b / 38:2:cs:r:g:b → 38,2,r,g,b   (truecolor; last 3 = rgb)
+//	38:5:n                                   → 38,5,n        (256-color)
+//	4:n                                      → 4             (underline; sub-param dropped)
+//
+// Falls back to the leading value for any other colon group so nothing leaks.
+func (st *Stream) expandSGRParams(params []int) []int {
+	hasColon := false
+	for _, s := range st.paramStrings {
+		if strings.ContainsRune(s, ':') {
+			hasColon = true
+			break
+		}
+	}
+	if !hasColon || len(st.paramStrings) != len(params) {
+		return params
+	}
+	out := make([]int, 0, len(params)+4)
+	for i, s := range st.paramStrings {
+		if !strings.ContainsRune(s, ':') {
+			out = append(out, params[i])
+			continue
+		}
+		parts := strings.Split(s, ":")
+		lead := params[i]
+		switch lead {
+		case 38, 48, 58:
+			kind := 0
+			if len(parts) >= 2 {
+				kind = atoiClamp(parts[1])
+			}
+			switch kind {
+			case 2:
+				tail := parts[2:]
+				if n := len(tail); n >= 3 {
+					out = append(out, lead, 2, atoiClamp(tail[n-3]), atoiClamp(tail[n-2]), atoiClamp(tail[n-1]))
+				} else {
+					out = append(out, lead)
+				}
+			case 5:
+				if len(parts) >= 3 {
+					out = append(out, lead, 5, atoiClamp(parts[2]))
+				} else {
+					out = append(out, lead)
+				}
+			default:
+				out = append(out, lead)
+			}
+		case 4:
+			// 4:n selects an underline style (4:0 none, 4:1 single, 4:2 double,
+			// 4:3 curly, 4:4 dotted, 4:5 dashed). Encode it as an internal
+			// SGR code SelectGraphicRendition decodes; the base 9999 clamp on
+			// wire params means this can't collide with real input.
+			style := 1
+			if len(parts) >= 2 {
+				style = atoiClamp(parts[1])
+			}
+			if style > 5 {
+				style = 5
+			}
+			out = append(out, sgrUnderlineStyleBase+style)
+		default:
+			out = append(out, lead)
+		}
+	}
+	return out
+}
+
+func atoiClamp(s string) int {
+	value := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			continue
+		}
+		value = value*10 + int(r-'0')
+		if value > 9999 {
+			return 9999
+		}
+	}
+	return value
+}
+
+func (st *Stream) dispatchCSI(final rune, params []int) {
+	// Private CSI prefixes other than '?' have alternate semantics for
+	// each final byte. Without explicit handling, falling through to
+	// the standard switch would misinterpret them — e.g. \e[>4m as
+	// SGR(4)=underline (xterm modifyOtherKeys), or \e[=0;1u as cursor
+	// restore (kitty keyboard push). We don't implement these
+	// extensions; ignore them unless we have a specific handler in the
+	// allow-list below.
+	if st.csiPrefix == '<' || st.csiPrefix == '=' || st.csiPrefix == '>' {
+		allowed := false
+		if st.csiPrefix == '>' {
+			switch final {
+			case 'c', 't', 'T', 'q':
+				// 'c' = DA2 (secondary device attributes)
+				// 't', 'T' = SetTitleMode
+				// 'q' = XTVERSION (report terminal name)
+				allowed = true
+			}
+		}
+		if !allowed {
+			return
+		}
+	}
+	// '?' marks DEC private modes and the queries beside them, and only
+	// the finals below take it (the methods called check st.private).
+	// With any other final it is another sequence entirely: \e[?u is the
+	// kitty keyboard query and \e[?1;1;0S xterm's graphics query, not a
+	// cursor restore and a scroll.
+	if st.csiPrefix == '?' {
+		switch final {
+		case 'J', 'K', 'c', 'h', 'l', 'm', 'n', 'r', 's':
+		case 'p', 'y':
+			if st.csiIntermediate != '$' {
+				return
+			}
+		default:
+			return
+		}
+	}
+	// An intermediate makes it a different sequence from the bare final:
+	// \e[1 A is SR, not CUU, and \e[1$u a report request, not a cursor
+	// restore. ' is HPA's own final, not an intermediate.
+	if st.csiIntermediate != 0 && final != '\'' {
+		st.dispatchCSIIntermediate(final, params)
+		return
+	}
+	switch final {
+	case '@':
+		st.listener.InsertCharacters(params...)
+	case 'A':
+		st.listener.CursorUp(params...)
+	case 'B':
+		st.listener.CursorDown(params...)
+	case 'C':
+		st.listener.CursorForward(params...)
+	case 'D':
+		st.listener.CursorBack(params...)
+	case 'E':
+		st.listener.CursorDown1(params...)
+	case 'F':
+		st.listener.CursorUp1(params...)
+	case 'G':
+		st.listener.CursorToColumn(params...)
+	case 'H', 'f':
+		st.listener.CursorPosition(params...)
+	case 'J':
+		how := defaultParam(params, 0, 0)
+		rest := []int{}
+		if len(params) > 1 {
+			rest = params[1:]
+		}
+		if how == 3 && !st.private {
+			return
+		}
+		if st.private {
+			st.listener.EraseInDisplaySelective(how)
+			return
+		}
+		st.listener.EraseInDisplay(how, st.private, rest...)
+	case 'K':
+		how := defaultParam(params, 0, 0)
+		rest := []int{}
+		if len(params) > 1 {
+			rest = params[1:]
+		}
+		st.listener.EraseInLine(how, st.private, rest...)
+	case 'L':
+		st.listener.InsertLines(params...)
+	case 'M':
+		st.listener.DeleteLines(params...)
+	case 'P':
+		st.listener.DeleteCharacters(params...)
+	case 'X':
+		st.listener.EraseCharacters(params...)
+	case 'I':
+		st.listener.CursorForwardTab(params...)
+	case 'Z':
+		if len(params) <= 1 {
+			st.listener.CursorBackTab(params...)
+			return
+		}
+		st.debugCSI(params)
+	case 'S':
+		st.listener.ScrollUp(params...)
+	case 'T':
+		st.listener.ScrollDown(params...)
+	case 'b':
+		st.listener.RepeatLast(params...)
+	case 'a':
+		st.listener.CursorForward(params...)
+	case '`':
+		st.listener.CursorToColumnAbsolute(params...)
+	case 'c':
+		mode := defaultParam(params, 0, 0)
+		rest := []int{}
+		if len(params) > 1 {
+			rest = params[1:]
+		}
+		st.listener.ReportDeviceAttributes(mode, st.private, st.csiPrefix, rest...)
+	case 'd':
+		st.listener.CursorToLine(params...)
+	case 'e':
+		st.listener.CursorDown(params...)
+	case 'g':
+		st.listener.ClearTabStop(params...)
+	case 'h':
+		st.listener.SetMode(params, st.private)
+	case 'l':
+		st.listener.ResetMode(params, st.private)
+	case 'm':
+		st.listener.SelectGraphicRendition(st.expandSGRParams(params), st.private)
+	case 'n':
+		mode := defaultParam(params, 0, 0)
+		rest := []int{}
+		if len(params) > 1 {
+			rest = params[1:]
+		}
+		st.listener.ReportDeviceStatus(mode, st.private, st.csiPrefix, rest...)
+	case 'r':
+		if st.private {
+			st.listener.RestoreModes(params)
+			return
+		}
+		st.listener.SetMargins(params...)
+	case 's':
+		if st.private {
+			st.listener.SaveModes(params)
+			return
+		}
+		if len(params) >= 2 {
+			st.listener.SetLeftRightMargins(defaultParam(params, 0, 0), defaultParam(params, 1, 0))
+			return
+		}
+		if st.listener.isModeSet(ModeDECLRMM) {
+			return
+		}
+		st.listener.SaveCursorDEC()
+	case 'u':
+		st.listener.RestoreCursorDEC()
+	case '\'':
+		st.listener.CursorToColumnAbsolute(params...)
+	default:
+		if st.csiPrefix == '>' && final == 't' {
+			st.listener.SetTitleMode(params, false)
+			return
+		}
+		if st.csiPrefix == '>' && final == 'T' {
+			st.listener.SetTitleMode(params, true)
+			return
+		}
+		if st.csiPrefix == '>' && final == 'q' {
+			st.listener.ReportTerminalVersion()
+			return
+		}
+		if final == 't' {
+			st.listener.WindowOp(params)
+			return
+		}
+		st.debugCSI(params)
+	}
+}
+
+// dispatchCSIIntermediate is a CSI whose final follows an intermediate byte
+// (\e[5 q, \e[?1$p, \e[!p): its own sequence, whatever the bare final is.
+func (st *Stream) dispatchCSIIntermediate(final rune, params []int) {
+	if st.csiIntermediate == '"' && final == 'p' {
+		level := defaultParam(params, 0, 0)
+		seven := defaultParam(params, 1, 0)
+		st.listener.SetConformance(level, seven)
+		return
+	}
+	if st.csiIntermediate == '"' && final == 'q' {
+		st.listener.SetCharacterProtection(defaultParam(params, 0, 0))
+		return
+	}
+	if st.csiIntermediate == ' ' && final == 'q' {
+		st.listener.SetCursorStyle(defaultParam(params, 0, 0))
+		return
+	}
+	if st.csiIntermediate == '$' && final == 'p' {
+		st.listener.ReportMode(defaultParam(params, 0, 0), st.private)
+		return
+	}
+	if st.csiIntermediate == '!' && final == 'p' {
+		st.listener.SoftReset()
+		return
+	}
+	if st.csiIntermediate == '\'' && final == '}' {
+		st.listener.InsertColumns(defaultParam(params, 0, 1))
+		return
+	}
+	if st.csiIntermediate == '\'' && final == '~' {
+		st.listener.DeleteColumns(defaultParam(params, 0, 1))
+		return
+	}
+	if st.csiIntermediate == '$' && final == '}' {
+		st.listener.SetActiveStatusDisplay(defaultParam(params, 0, 0))
+		return
+	}
+	if st.csiIntermediate == '$' && final == 'z' {
+		st.listener.EraseRectangle(defaultParam(params, 0, 0), defaultParam(params, 1, 0), defaultParam(params, 2, 0), defaultParam(params, 3, 0))
+		return
+	}
+	if st.csiIntermediate == '$' && final == '{' {
+		st.listener.SelectiveEraseRectangle(defaultParam(params, 0, 0), defaultParam(params, 1, 0), defaultParam(params, 2, 0), defaultParam(params, 3, 0))
+		return
+	}
+	if st.csiIntermediate == '$' && final == 'x' {
+		ch := rune(defaultParam(params, 0, 0))
+		st.listener.FillRectangle(ch, defaultParam(params, 1, 0), defaultParam(params, 2, 0), defaultParam(params, 3, 0), defaultParam(params, 4, 0))
+		return
+	}
+	if st.csiIntermediate == '$' && final == 'v' {
+		srcTop := defaultParam(params, 0, 0)
+		srcLeft := defaultParam(params, 1, 0)
+		srcBottom := defaultParam(params, 2, 0)
+		srcRight := defaultParam(params, 3, 0)
+		dstTop := defaultParam(params, 5, 0)
+		dstLeft := defaultParam(params, 6, 0)
+		st.listener.CopyRectangle(srcTop, srcLeft, srcBottom, srcRight, dstTop, dstLeft)
+		return
+	}
+	if st.csiIntermediate == '$' && final == 'y' {
+		st.listener.ReportMode(defaultParam(params, 0, 0), st.private)
+		return
+	}
+	st.debugCSI(params)
+}
+
+func (st *Stream) debugCSI(params []int) {
+	args := make([]interface{}, len(params))
+	for i, v := range params {
+		args[i] = v
+	}
+	st.listener.Debug(args...)
+}
+
+// utf8SafeCharset reports whether a charset-designation final byte is safe to
+// honor in UTF-8 mode: DEC Special Graphics ('0', line drawing) and the
+// ASCII/UK/Latin sets ('B', 'A'), all of which are identity for code points
+// >=0x80. The IBM-PC ('U') and VAX ('V') sets remap the high range and would
+// corrupt decoded multibyte text, so they're ignored in UTF-8 mode (as xterm
+// does).
+func utf8SafeCharset(ch rune) bool {
+	switch ch {
+	case '0', 'B', 'A':
+		return true
+	}
+	return false
+}
+
+// SelectOtherCharset switches to the specified character set.
+func (st *Stream) SelectOtherCharset(code string) {
+	if code == "@" {
+		st.useUTF8 = false
+	} else if code == "G" || code == "8" {
+		st.useUTF8 = true
+	}
+}
+
+func isControlInCSI(ch rune) bool {
+	switch ch {
+	case '\x07', '\x08', '\t', '\n', '\x0b', '\x0c', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func (st *Stream) dispatchControl(ch rune) {
+	switch ch {
+	case '\x07':
+		st.listener.Bell()
+	case '\x08':
+		st.listener.Backspace()
+	case '\t':
+		st.listener.Tab()
+	case '\n', '\x0b', '\x0c':
+		st.listener.LineFeed()
+	case '\r':
+		st.listener.CarriageReturn()
+	}
+}
+
+func defaultParam(params []int, index int, fallback int) int {
+	if index < len(params) {
+		if params[index] == 0 {
+			return fallback
+		}
+		return params[index]
+	}
+	return fallback
+}
+
+func (st *Stream) isPlainText(ch rune) bool {
+	if ch == utf8.RuneError {
+		return false
+	}
+	if ch == '\x1b' || ch == '\x9b' || ch == '\x9d' || ch == '\x00' || ch == '\x7f' {
+		return false
+	}
+	switch ch {
+	case '\x07', '\x08', '\t', '\n', '\x0b', '\x0c', '\r', '\x0e', '\x0f', '\x84', '\x85', '\x88', '\x8d', '\x90', '\x96', '\x97', '\x98', '\x9a', '\x9e', '\x9f':
+		return false
+	}
+	return true
+}

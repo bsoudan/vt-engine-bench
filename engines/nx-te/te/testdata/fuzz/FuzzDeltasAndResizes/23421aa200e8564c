@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("\x1b[\f\f\f\f\f\f?3h")
+uint16(134)
+byte('\'')
+byte('K')

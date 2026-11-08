@@ -1,5 +1,6 @@
-// Benchmark-only C entry points over nxterm's terminal engine (nx/te), built as
-// a C archive by ../build.rs and linked into the Rust benchmark. Like the
+// Benchmark-only C entry points over nxterm's terminal engine (nx/te, the copy
+// vendored in engines/nx-te), built as a C archive by ../build.rs and linked
+// into the Rust benchmark. Like the
 // Ghostty shim it exposes only what the benchmark and the compatibility
 // fixtures use; it is not a general binding.
 package main

@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("\x1b[?12;3h表示\x1b[047r00\r\n\x1000\n000\n000\n000\n000\n0000000\n000\n\x1b[?0000A\xb40")
+uint16(56)
+byte('\'')
+byte('-')

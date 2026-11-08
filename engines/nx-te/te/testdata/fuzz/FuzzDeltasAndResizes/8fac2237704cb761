@@ -1,0 +1,5 @@
+go test fuzz v1
+[]byte("\x1b[\n0\nL\n000\n00000\n0000\n00000\n0000000\x1bc000000000000000\n\n\n0\n\n\n0")
+uint16(59)
+byte('\f')
+byte('H')

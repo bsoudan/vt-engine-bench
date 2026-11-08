@@ -1,6 +1,6 @@
 module nxvt
 
-go 1.25.8
+go 1.25.0
 
 require nx v0.0.0
 
@@ -9,4 +9,4 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 )
 
-replace nx => ../../../engines/nxterm
+replace nx => ../../../engines/nx-te

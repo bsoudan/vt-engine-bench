@@ -1,6 +1,6 @@
-//! Builds go/ as a C archive of nxterm's te engine (engines/nxterm) with the
-//! Go toolchain on PATH, and links it. The Nix shell provides Go on Linux;
-//! on macOS, `brew install go`.
+//! Builds go/ as a C archive of nxterm's te engine (the copy vendored in
+//! engines/nx-te) with the Go toolchain on PATH, and links it. The Nix shell
+//! provides Go on Linux; on macOS, `brew install go`.
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -28,6 +28,6 @@ fn main() {
         _ => println!("cargo:rustc-link-lib=pthread"),
     }
     println!("cargo:rerun-if-changed=go");
-    println!("cargo:rerun-if-changed=../../engines/nxterm/te");
-    println!("cargo:rerun-if-changed=../../engines/nxterm/cell");
+    println!("cargo:rerun-if-changed=../../engines/nx-te/te");
+    println!("cargo:rerun-if-changed=../../engines/nx-te/cell");
 }
