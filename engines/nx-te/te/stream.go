@@ -229,18 +229,32 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 		st.pendingBytes = st.pendingBytes[:0]
 	}
 
+	// Plain text goes to Draw in runs. A run is the bytes of data it covers,
+	// data[start:i], made into one string when it is flushed; start is -1
+	// with no run open. A byte that is not the UTF-8 of the character drawn
+	// for it (one drawn as U+FFFD, or a Latin-1 byte when not in UTF-8 mode)
+	// makes the run its characters instead, textBuf, from then on.
 	var textBuf []rune
-	flush := func() {
-		if len(textBuf) > 0 {
+	start, raw := -1, true
+	flush := func(end int) {
+		if start < 0 {
+			return
+		}
+		if raw {
+			st.listener.Draw(string(data[start:end]))
+		} else {
 			st.listener.Draw(string(textBuf))
 			textBuf = textBuf[:0]
 		}
+		start, raw = -1, true
 	}
 
-	for i := 0; i < len(data); {
+	i := 0 // where the loop stopped, after it: the end of an open run
+	for i < len(data) {
 		b := data[i]
 		var ch rune
 		size := 1
+		asIs := true // the bytes are the UTF-8 of ch
 		if b < 0x80 {
 			ch = rune(b)
 		} else if b >= 0xC0 {
@@ -256,8 +270,10 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 				size = n
 			} else if st.useUTF8 {
 				ch = utf8.RuneError
+				asIs = false
 			} else {
 				ch = rune(b)
+				asIs = false
 			}
 		} else if st.useUTF8 {
 			// A byte that isn't UTF-8 is drawn as U+FFFD, as other terminals
@@ -265,16 +281,28 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 			// Latin-1 file would open a DCS that swallows what follows. C1s
 			// in UTF-8 come encoded (C2 9B) and are decoded above.
 			ch = utf8.RuneError
+			asIs = false
 		} else {
 			ch = rune(b)
+			asIs = false
 		}
 
 		if st.isPlainText(ch) && st.state == stateGround {
-			textBuf = append(textBuf, ch)
+			if start < 0 {
+				start = i
+			}
+			if raw && !asIs {
+				// The run so far was bytes; from here it is characters.
+				textBuf = append(textBuf[:0], []rune(string(data[start:i]))...)
+				raw = false
+			}
+			if !raw {
+				textBuf = append(textBuf, ch)
+			}
 			i += size
 			continue
 		}
-		flush()
+		flush(i)
 		if err := st.feedRune(ch); err != nil {
 			return err
 		}
@@ -291,7 +319,7 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 		st.dispatchCSI('\'', params)
 		st.resetCSI()
 	}
-	flush()
+	flush(i)
 	return nil
 }
 
