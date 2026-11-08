@@ -131,6 +131,11 @@ type Screen struct {
 	altWrapNext    bool
 	altActive      bool
 	altSavedCursor *Cursor
+
+	// hot is the state of the modes the hot paths read — for each cell
+	// drawn, each row scrolled, each blank cell made — as booleans, kept
+	// with Mode by modesChanged, so those paths don't look them up in it.
+	hot struct{ lrmm, om, awm, irm, scnm bool }
 }
 
 // IsAltScreenActive reports whether the alternate screen buffer is active.
@@ -179,6 +184,7 @@ func (s *Screen) Reset() {
 		ModeDECTCEM:      {},
 		ModeAllow80To132: {},
 	}
+	s.modesChanged()
 	s.Title = ""
 	s.IconName = ""
 	s.Charset = 0
@@ -1972,6 +1978,7 @@ func (s *Screen) SoftReset() {
 	s.leftMargin = 0
 	s.rightMargin = s.Columns - 1
 	s.Mode = map[int]struct{}{ModeDECAWM: {}, ModeDECTCEM: {}, ModeAllow80To132: {}}
+	s.modesChanged()
 	s.Cursor.Attr = s.defaultAttr()
 	s.G0 = charsetLat1
 	s.G1 = charsetVT100
@@ -2966,11 +2973,13 @@ func (s *Screen) applySetMode(mode int, private bool) {
 		s.Mode = make(map[int]struct{})
 	}
 	s.Mode[mode] = struct{}{}
+	s.modesChanged()
 	if mode == ModeSyncOutput && s.SyncOutput != nil {
 		s.SyncOutput(true)
 	}
 	if mode == ModeDECLRMM && s.conformanceExplicit && s.conformanceLevel < 4 {
 		delete(s.Mode, mode)
+		s.modesChanged()
 		return
 	}
 	if mode == ModeDECNCSM && s.conformanceExplicit && s.conformanceLevel < 5 {
@@ -3031,6 +3040,7 @@ func (s *Screen) applyResetMode(mode int, private bool) {
 	}
 	ended := mode == ModeSyncOutput && s.isModeSet(mode)
 	delete(s.Mode, mode)
+	s.modesChanged()
 	s.syncOutputCleared(ended)
 
 	if mode == ModeDECCOLM {
@@ -3220,8 +3230,31 @@ func (s *Screen) ensureVB(useMargins bool) {
 }
 
 func (s *Screen) isModeSet(mode int) bool {
+	switch mode {
+	case ModeDECLRMM:
+		return s.hot.lrmm
+	case ModeDECOM:
+		return s.hot.om
+	case ModeDECAWM:
+		return s.hot.awm
+	case ModeIRM:
+		return s.hot.irm
+	case ModeDECSCNM:
+		return s.hot.scnm
+	}
 	_, ok := s.Mode[mode]
 	return ok
+}
+
+// modesChanged brings hot up to date with Mode. Every write to Mode calls
+// it; TestHotModesFollowMap checks they agree after each way of writing.
+func (s *Screen) modesChanged() {
+	has := func(mode int) bool { _, ok := s.Mode[mode]; return ok }
+	s.hot.lrmm = has(ModeDECLRMM)
+	s.hot.om = has(ModeDECOM)
+	s.hot.awm = has(ModeDECAWM)
+	s.hot.irm = has(ModeIRM)
+	s.hot.scnm = has(ModeDECSCNM)
 }
 
 // scrolled tells Scrolled of a scroll about to happen, if it is set.

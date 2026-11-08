@@ -150,6 +150,7 @@ func (s *Screen) UnmarshalState(st *ScreenState) {
 
 	s.Cursor = st.Cursor
 	s.Mode = boolToSetMap(st.Mode)
+	s.modesChanged()
 	s.TabStops = boolToSetMap(st.TabStops)
 	s.savedModes = maps.Clone(st.SavedModes)
 	s.Margins = clonePtr(st.Margins)
