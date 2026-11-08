@@ -1579,11 +1579,11 @@ func (s *Screen) SelectGraphicRendition(attrs []int, private bool) {
 	}
 
 	replace := s.Cursor.Attr
-	queue := append([]int(nil), attrs...)
 
-	for len(queue) > 0 {
-		attr := queue[0]
-		queue = queue[1:]
+	// attrs is read in place; a color's sub-parameters (38;5;n, 38;2;r;g;b)
+	// are taken from after it, i moving past what was taken.
+	for i := 0; i < len(attrs); i++ {
+		attr := attrs[i]
 		switch {
 		case attr == 0:
 			replace = s.defaultAttr()
@@ -1599,49 +1599,45 @@ func (s *Screen) SelectGraphicRendition(attrs []int, private bool) {
 			replace.Fg = Color{Mode: ColorANSI16, Index: uint8(attr - 90 + 8)}
 		case attr >= 100 && attr <= 107:
 			replace.Bg = Color{Mode: ColorANSI16, Index: uint8(attr - 100 + 8)}
-		case textAttributes[attr] != "":
-			flag := textAttributes[attr]
-			switch flag {
-			case "+bold":
-				replace.Bold = true
-			case "+faint":
-				replace.Faint = true
-			case "-intensity":
-				replace.Bold = false
-				replace.Faint = false
-			case "+italics":
-				replace.Italics = true
-			case "-italics":
-				replace.Italics = false
-			case "+underline":
-				// Plain SGR 4 is single underline; it overrides any prior
-				// colon-form style. (4:n styles arrive via the marker case.)
-				replace.Underline = true
-				replace.UnderlineStyle = 1
-			case "-underline":
-				replace.Underline = false
-				replace.UnderlineStyle = 0
-			case "+overline":
-				replace.Overline = true
-			case "-overline":
-				replace.Overline = false
-			case "+blink":
-				replace.Blink = true
-			case "-blink":
-				replace.Blink = false
-			case "+reverse":
-				replace.Reverse = true
-			case "-reverse":
-				replace.Reverse = false
-			case "+strikethrough":
-				replace.Strikethrough = true
-			case "-strikethrough":
-				replace.Strikethrough = false
-			case "+conceal":
-				replace.Conceal = true
-			case "-conceal":
-				replace.Conceal = false
-			}
+		case attr == 1:
+			replace.Bold = true
+		case attr == 2:
+			replace.Faint = true
+		case attr == 22:
+			replace.Bold = false
+			replace.Faint = false
+		case attr == 3:
+			replace.Italics = true
+		case attr == 23:
+			replace.Italics = false
+		case attr == 4:
+			// Plain SGR 4 is single underline; it overrides any prior
+			// colon-form style. (4:n styles arrive via the marker case.)
+			replace.Underline = true
+			replace.UnderlineStyle = 1
+		case attr == 24:
+			replace.Underline = false
+			replace.UnderlineStyle = 0
+		case attr == 53:
+			replace.Overline = true
+		case attr == 55:
+			replace.Overline = false
+		case attr == 5:
+			replace.Blink = true
+		case attr == 25:
+			replace.Blink = false
+		case attr == 7:
+			replace.Reverse = true
+		case attr == 27:
+			replace.Reverse = false
+		case attr == 9:
+			replace.Strikethrough = true
+		case attr == 29:
+			replace.Strikethrough = false
+		case attr == 8:
+			replace.Conceal = true
+		case attr == 28:
+			replace.Conceal = false
 		case attr == 21:
 			// SGR 21 = double underline (ECMA-48).
 			replace.Underline = true
@@ -1668,29 +1664,25 @@ func (s *Screen) SelectGraphicRendition(attrs []int, private bool) {
 			default:
 				target = &replace.UnderlineColor
 			}
-			if len(queue) < 1 {
+			if i+1 >= len(attrs) {
 				break
 			}
-			mode := queue[0]
-			queue = queue[1:]
-			switch mode {
+			i++
+			switch attrs[i] {
 			case 5:
-				if len(queue) < 1 {
+				if i+1 >= len(attrs) {
 					break
 				}
-				index := queue[0]
-				queue = queue[1:]
-				if index >= 0 && index < 256 {
+				i++
+				if index := attrs[i]; index >= 0 && index < 256 {
 					*target = Color{Mode: ColorANSI256, Index: uint8(index)}
 				}
 			case 2:
-				if len(queue) < 3 {
-					break
+				if i+3 >= len(attrs) {
+					break // too few: what follows is read as attributes, as before
 				}
-				r := queue[0]
-				g := queue[1]
-				b := queue[2]
-				queue = queue[3:]
+				r, g, b := attrs[i+1], attrs[i+2], attrs[i+3]
+				i += 3
 				*target = Color{Mode: ColorTrueColor, RGB: uint32(r&0xff)<<16 | uint32(g&0xff)<<8 | uint32(b&0xff)}
 			}
 		}
