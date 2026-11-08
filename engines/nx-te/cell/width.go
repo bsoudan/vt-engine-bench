@@ -57,6 +57,11 @@ func (p WidthPolicy) Pieces(cluster string) []string {
 // Width is the number of columns one grapheme cluster occupies under the
 // policy: the sum of its pieces.
 func (p WidthPolicy) Width(cluster string) int {
+	if len(cluster) == 1 {
+		if b := cluster[0]; b >= 0x20 && b < 0x7f {
+			return 1 // printable ASCII: one column, never a cluster
+		}
+	}
 	w := 0
 	for _, piece := range p.Pieces(cluster) {
 		w += p.pieceWidth(piece)
