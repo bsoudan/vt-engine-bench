@@ -26,7 +26,7 @@ func (st *Stream) MarshalState() *StreamState {
 	s := &StreamState{
 		State:           int(st.state),
 		Params:          append([]int(nil), st.params...),
-		Current:         st.current,
+		Current:         string(st.current),
 		Private:         st.private,
 		CSIPrefix:       st.csiPrefix,
 		CSIIntermediate: st.csiIntermediate,
@@ -54,7 +54,7 @@ func (st *Stream) UnmarshalState(s *StreamState) {
 	}
 	st.state = parserState(s.State)
 	st.params = append([]int(nil), s.Params...)
-	st.current = s.Current
+	st.current = append(st.current[:0], s.Current...)
 	st.private = s.Private
 	st.csiPrefix = s.CSIPrefix
 	st.csiIntermediate = s.CSIIntermediate

@@ -114,7 +114,7 @@ type Stream struct {
 	use8BitControls bool
 	state           parserState
 	params          []int
-	current         string
+	current         []byte // the parameter being read, its digits and colons so far; reused
 	private         bool
 	csiPrefix       rune
 	csiIntermediate rune
@@ -178,7 +178,7 @@ func (st *Stream) Attach(screen EventHandler) {
 	st.listener = screen
 	st.state = stateGround
 	st.params = nil
-	st.current = ""
+	st.current = st.current[:0]
 	st.private = false
 	st.csiPrefix = 0
 	st.csiIntermediate = 0
@@ -336,7 +336,7 @@ func (st *Stream) feedRune(ch rune) error {
 			// xterm ignores them in UTF-8 mode.
 			return nil
 		}
-		st.listener.DefineCharset(string(ch), st.current)
+		st.listener.DefineCharset(string(ch), string(st.current))
 		return nil
 	case stateEscapePercent:
 		st.state = stateGround
@@ -462,10 +462,10 @@ func (st *Stream) handleEscape(ch rune) error {
 	case ' ':
 		st.state = stateEscapeSpace
 	case '%':
-		st.current = ""
+		st.current = st.current[:0]
 		st.state = stateEscapePercent
 	case '(', ')':
-		st.current = string(ch)
+		st.current = append(st.current[:0], byte(ch))
 		st.state = stateCharset
 	case '!', '"', '$', '&', '\'', '*', '+', ',', '-', '.', '/':
 		// The designations te doesn't keep (G2 and G3, the 96-character and
@@ -560,14 +560,14 @@ func (st *Stream) handleCSI(ch rune) error {
 		return nil
 	}
 	if ch >= '0' && ch <= '9' {
-		st.current += string(ch)
+		st.current = append(st.current, byte(ch))
 		return nil
 	}
 	if ch == ':' {
 		// Colon introduces SGR sub-parameters (ITU/kitty form). Accumulate it
 		// into the current parameter string; appendParam keeps the raw string
 		// and expandSGRParams interprets the colon groups for SGR.
-		st.current += string(ch)
+		st.current = append(st.current, byte(ch))
 		return nil
 	}
 	if ch == ';' {
@@ -796,37 +796,44 @@ func (st *Stream) finishOSC() {
 			st.listener.ResetSpecialColor(idx, false)
 		}
 	}
-	st.current = ""
+	st.current = st.current[:0]
 }
 
 func (st *Stream) resetCSI() {
 	st.params = st.params[:0]
 	st.paramStrings = st.paramStrings[:0]
-	st.current = ""
+	st.current = st.current[:0]
 	st.private = false
 	st.csiPrefix = 0
 	st.csiIntermediate = 0
 	st.pendingQuote = false
 }
 
+// appendParam ends the parameter being read: its value, the digits before
+// any colon, goes to params, and to paramStrings the parameter as written
+// when it has sub-parameters (expandSGRParams reads them), else "" — so a
+// parameter without them costs no string.
 func (st *Stream) appendParam() {
 	value := 0
-	current := st.current
-	if current != "" {
-		for _, r := range current {
-			if r == ':' {
-				break // integer value is the part before the first sub-parameter
-			}
-			value = value*10 + int(r-'0')
-			if value > 9999 {
-				value = 9999
-				break
-			}
+	colon := false
+	for _, b := range st.current {
+		if b == ':' {
+			colon = true
+			break // integer value is the part before the first sub-parameter
 		}
+		value = value*10 + int(b-'0')
+		if value > 9999 {
+			value = 9999
+			break
+		}
+	}
+	var current string
+	if colon {
+		current = string(st.current)
 	}
 	st.params = append(st.params, value)
 	st.paramStrings = append(st.paramStrings, current)
-	st.current = ""
+	st.current = st.current[:0]
 }
 
 // expandSGRParams flattens colon-grouped SGR sub-parameters (ITU/kitty form)
