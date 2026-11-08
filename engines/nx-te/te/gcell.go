@@ -265,18 +265,6 @@ func blankLine(cols int, cell gcell) []gcell {
 	return line
 }
 
-// refillLine is a blank line of cols cells, made in spare when spare is a
-// row of that width nothing else holds, else fresh.
-func refillLine(spare []gcell, cols int, cell gcell) []gcell {
-	if len(spare) != cols {
-		return blankLine(cols, cell)
-	}
-	for i := range spare {
-		spare[i] = cell
-	}
-	return spare
-}
-
 // makeBlankCells is lines rows of cols blank cells.
 func makeBlankCells(lines, cols int) [][]gcell {
 	cells := make([][]gcell, lines)

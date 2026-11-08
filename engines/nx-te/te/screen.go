@@ -432,6 +432,18 @@ func (s *Screen) blankRowOf(cell gcell) []gcell {
 	return s.blankTmpl
 }
 
+// refillLine is a blank row in the default attributes, made in spare when
+// spare is a row of the screen's width nothing else holds, else fresh; a
+// copy of the blank row kept for that, not a cell at a time.
+func (s *Screen) refillLine(spare []gcell) []gcell {
+	tmpl := s.blankRowOf(s.blankCell())
+	if len(spare) != len(tmpl) {
+		return append([]gcell(nil), tmpl...)
+	}
+	copy(spare, tmpl)
+	return spare
+}
+
 // Draw renders text at the current cursor position.
 func (s *Screen) Draw(data string) {
 	if !asciiFastPath || !s.charsetIdentity() {
@@ -729,7 +741,7 @@ func (s *Screen) Index() {
 			for row := top; row < bottom; row++ {
 				s.rows[row] = s.rows[row+1]
 			}
-			s.rows[bottom] = refillLine(spare, s.Columns, s.blankCell())
+			s.rows[bottom] = s.refillLine(spare)
 		} else {
 			// DECLRMM: scroll only the columns inside the margins, like
 			// ScrollUp, so content outside [left,right] is left in place.
