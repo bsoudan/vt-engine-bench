@@ -15,12 +15,17 @@
 # Mutter's org.gnome.Mutter.ScreenCast D-Bus API and reads the PipeWire
 # stream with GStreamer. The GPUI app itself needs Wayland, xkbcommon,
 # Vulkan, FreeType and Fontconfig on Linux.
+#
+# The same harness also measures nxgui, the GNOME console of engines/nxterm
+# (Go; GTK 4 and libadwaita through gotk4), built by scripts/run_gpui_bench.sh
+# with `go build -tags gtk` and run from the checkout.
 { lib, stdenv, mkShell, bashInteractive, gnumake, jq, git, gh, openssh
 , rustc, cargo, rustfmt, clippy, rust-analyzer, rustPlatform
 , zig_0_16, pkg-config
 , python3, tmux
 , libxkbcommon, libxcb, wayland, vulkan-loader, freetype, fontconfig
 , gobject-introspection, gst_all_1, pipewire
+, go, gtk4, libadwaita, gsettings-desktop-schemas, adwaita-icon-theme
 , name, sandbox }:
 
 let
@@ -66,11 +71,16 @@ mkShell {
     tmux
 
     sandbox
-  ] ++ lib.optionals stdenv.isLinux gstPackages;
+  ] ++ lib.optionals stdenv.isLinux (gstPackages ++ [
+    # engines/nxterm: nxgui and nxterm are Go programs; gotk4 links GTK 4
+    # and libadwaita through cgo and pkg-config.
+    go
+  ]);
 
   # Libraries the project links, found through pkg-config or -L: GPUI's
-  # Linux backend links xkbcommon (+ its X11 half), libxcb and FreeType.
-  buildInputs = lib.optionals stdenv.isLinux [ libxkbcommon libxcb freetype fontconfig ];
+  # Linux backend links xkbcommon (+ its X11 half), libxcb and FreeType;
+  # nxgui links GTK 4 and libadwaita.
+  buildInputs = lib.optionals stdenv.isLinux [ libxkbcommon libxcb freetype fontconfig gtk4 libadwaita gobject-introspection ];
 
   # rust-analyzer's view of the standard library.
   RUST_SRC_PATH = "${rustPlatform.rustLibSrc}";
@@ -93,6 +103,16 @@ mkShell {
       # below), as does the session D-Bus socket DBUS_SESSION_BUS_ADDRESS
       # already names by path.
       export PIPEWIRE_RUNTIME_DIR="''${PIPEWIRE_RUNTIME_DIR:-/run/user/$(id -u)}"
+      # Go's caches in the checkout, like cargo's; the toolchain is nixpkgs'
+      # (no download of the one engines/nxterm/go.mod names).
+      export GOPATH="$PWD/.local/go"
+      export GOMODCACHE="$GOPATH/pkg/mod"
+      export GOCACHE="$PWD/.local/var/cache/go-build"
+      export GOTOOLCHAIN=local
+      mkdir -p "$GOMODCACHE" "$GOCACHE"
+      # What a GTK 4 program run straight from the checkout needs that a
+      # packaged one gets from wrapGAppsHook: its GSettings schemas and icons.
+      export XDG_DATA_DIRS="${gtk4}/share/gsettings-schemas/${gtk4.name}:${gsettings-desktop-schemas}/share/gsettings-schemas/${gsettings-desktop-schemas.name}:${adwaita-icon-theme}/share:${libadwaita}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
     ''}
     # stdenv exports its build bash as $SHELL -- made without readline
     # or completion, so a bash prompt shows its \[ \] markers as text --

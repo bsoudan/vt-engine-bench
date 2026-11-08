@@ -12,6 +12,12 @@ def percentile(values, percent):
 
 
 def run(events_file, capture_file):
+    # A subject that paints less often than it is updated shows fewer marker
+    # states than it was sent; that is its result, not a capture failure.
+    # The GPUI app renders every update, so for it a low count means the
+    # capture fell behind; nxgui (a terminal fed through a pty) repaints at
+    # its own pace, so its count is reported as is.
+    coalescing = Path(events_file).name.startswith("nxgui-")
     events = list(csv.DictReader(open(events_file)))
     captures = list(csv.DictReader(open(capture_file)))
     assert len(events) == 120, f"expected 120 updates, got {len(events)}"
@@ -25,6 +31,8 @@ def run(events_file, capture_file):
     output = []
     for phase, start, end, limit in (("tmux", 1, 80, 70), ("input", 81, 120, 36)):
         samples = [(s, observed[s] - float(events[s - 1]["sent_epoch_ms"])) for s in range(start, end + 1) if s in observed]
+        if coalescing:
+            limit = 2
         assert len(samples) >= limit, f"{phase}: only {len(samples)}/{end - start + 1} frames reached capture; no valid benchmark"
         assert all(0 <= latency < 250 for _, latency in samples), f"{phase}: invalid capture latency; event/capture clocks or indexing disagree"
         intervals = [observed[s] - observed[s - 1] for s in range(start + 1, end + 1) if s in observed and s - 1 in observed]
@@ -38,7 +46,10 @@ if __name__ == "__main__":
         root = Path(sys.argv[2])
         writer = csv.writer(sys.stdout, lineterminator="\n")
         writer.writerow(["engine", "run", "phase", "captured", "expected", "event_to_pixel_median_ms", "event_to_pixel_p95_ms", "capture_interval_median_ms", "capture_interval_p95_ms"])
-        for engine in ("alacritty", "ghostty", "vt100", "wezterm"):
+        engines = ["alacritty", "ghostty", "vt100", "wezterm"]
+        if (root / "nxgui-1-events.csv").exists():  # the real GNOME window, Linux only
+            engines.append("nxgui")
+        for engine in engines:
             for number in (1, 2, 3):
                 prefix = root / f"{engine}-{number}"
                 try:

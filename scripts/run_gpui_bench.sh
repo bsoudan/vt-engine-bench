@@ -2,8 +2,11 @@
 # macOS: run from a logged-in desktop session with Screen Recording permission
 #        (ScreenCaptureKit captures the GPUI window).
 # Linux: run from any shell on a machine with a live GNOME Wayland session; the
-#        GPUI window opens fullscreen in that session and scripts/capture_gpui_linux.py
-#        observes it through Mutter's screencast API (see README).
+#        GPUI window opens in that session and scripts/capture_gpui_linux.py
+#        observes it through Mutter's screencast API (see README). The fifth
+#        subject there is nxgui, the GNOME console of engines/nxterm: a real
+#        terminal window fed through an nxterm vtapp's pty (scripts/nxgui_feed.py)
+#        with keys injected by GNOME (scripts/nxgui_keys.py).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -11,14 +14,16 @@ if [[ -d "$root/.context/zig" ]]; then PATH="$root/.context/zig:$PATH"; fi # boo
 cargo build --release --features gpui-bench --bin gpui_bench
 app_pid=
 capture_pid=
+extra_pids=()
 cleanup() {
   if [[ -n "${capture_bin:-}" ]]; then rm -f "$capture_bin"; fi
-  for pid in "$app_pid" "$capture_pid" "${inhibit_pid:-}"; do
+  for pid in "$app_pid" "$capture_pid" "${inhibit_pid:-}" "${extra_pids[@]}"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
 }
 trap cleanup EXIT
 os="$(uname -s)"
+engines=(alacritty ghostty vt100 wezterm)
 case "$os" in
   Darwin)
     capture_bin="$(mktemp "${TMPDIR:-/tmp}/vt-capture-gpui.XXXXXX")"
@@ -51,6 +56,11 @@ bus.call_sync("org.gnome.SessionManager", "/org/gnome/SessionManager", "org.gnom
 signal.pause()
 PY
     inhibit_pid=$!
+    # nxgui and nxterm from the pinned submodule; the gtk tag links GTK 4.
+    nx_bin="$root/target/nx/bin"
+    mkdir -p "$nx_bin"
+    (cd engines/nxterm && go build -tags gtk -o "$nx_bin/nxgui" ./cmd/nxgui && go build -o "$nx_bin/nxterm" ./cmd/nxterm)
+    engines+=(nxgui)
     ;;
   *) echo "Unsupported OS: $os" >&2; exit 1 ;;
 esac
@@ -93,16 +103,61 @@ run_once() {
   cat "$prefix-app.log" "$prefix-capture.log"
   python3 scripts/summarize_gpui.py "$prefix-events.csv" "$prefix-captures.csv"
 }
-engines=(alacritty ghostty vt100 wezterm)
-if (( $# )); then engines=("$1"); fi
+# nxgui: the collector first, then an nxterm vtapp running the feeder in a
+# private nx runtime dir (its own app registry, away from any nx session of
+# the user's), then nxgui showing it, maximized by GNOME's shortcut; the
+# feeder paints the marker once the window is big enough, and the key
+# injector takes over after the tmux phase.
+run_nxgui() {
+  local prefix="$1" nx_runtime="$output/nx-runtime"
+  rm -rf "$nx_runtime"; mkdir -p -m 0700 "$nx_runtime"
+  rm -f "$prefix-keys-ready"
+  python3 scripts/capture_gpui_linux.py "$prefix-events.csv" "$prefix-captures.csv" "$prefix-ready" "$prefix-streaming" \
+    >"$prefix-capture.log" 2>&1 &
+  capture_pid=$!
+  while [[ ! -e "$prefix-streaming" ]]; do
+    if ! kill -0 "$capture_pid" 2>/dev/null; then
+      wait "$capture_pid" || { capture_pid=; fail "$prefix-capture.log" "Capture failed"; return 1; }
+    fi
+    sleep 0.1
+  done
+  XDG_RUNTIME_DIR="$nx_runtime" "$nx_bin/nxterm" --session bench -- \
+    python3 "$root/scripts/nxgui_feed.py" "$prefix-events.csv" "$prefix-ready" "$prefix-keys-ready" "$prefix-app.log" \
+    >>"$prefix-app.log" 2>&1 &
+  extra_pids+=($!)
+  XDG_RUNTIME_DIR="$nx_runtime" "$nx_bin/nxgui" --font "DejaVu Sans Mono 10" >"$prefix-nxgui.log" 2>&1 &
+  local nxgui_pid=$!
+  extra_pids+=("$nxgui_pid")
+  sleep 2 # the window maps; the shortcut then goes to it as the newest, focused window
+  python3 scripts/nxgui_keys.py maximize
+  python3 scripts/nxgui_keys.py type "$prefix-keys-ready" "$prefix-keys.csv" >"$prefix-keys.log" 2>&1 &
+  local keys_pid=$!
+  extra_pids+=("$keys_pid")
+  local status=0
+  wait "$capture_pid" || status=1
+  capture_pid=
+  wait "$keys_pid" || true
+  kill "$nxgui_pid" 2>/dev/null || true
+  wait "$nxgui_pid" 2>/dev/null || true
+  rm -f "$prefix-ready" "$prefix-streaming" "$prefix-keys-ready"
+  if (( status )); then fail "$prefix-capture.log" "Capture failed"; return 1; fi
+  cat "$prefix-app.log" "$prefix-capture.log"
+  python3 scripts/summarize_gpui.py "$prefix-events.csv" "$prefix-captures.csv"
+}
+if (( $# )); then
+  engines=("$1")
+  if [[ "$1" == nxgui && "$os" != Linux ]]; then echo "nxgui is measured on Linux only" >&2; exit 1; fi
+fi
 for engine in "${engines[@]}"; do
   for run in 1 2 3; do
     prefix="$output/$engine-$run"
     for (( attempt = 1; attempt <= attempts; attempt++ )); do
       printf '\n%s run %s/3 (attempt %s/%s)\n' "$engine" "$run" "$attempt" "$attempts"
-      if run_once "$engine" "$prefix"; then break; fi
-      rm -f "$prefix-ready" "$prefix-streaming"
-      for file in events.csv captures.csv app.log capture.log; do
+      if [[ "$engine" == nxgui ]]; then
+        if run_nxgui "$prefix"; then break; fi
+      elif run_once "$engine" "$prefix"; then break; fi
+      rm -f "$prefix-ready" "$prefix-streaming" "$prefix-keys-ready"
+      for file in events.csv captures.csv app.log capture.log nxgui.log keys.csv keys.log; do
         if [[ -e "$prefix-$file" ]]; then mv "$prefix-$file" "$prefix-attempt$attempt-$file"; fi
       done
       if (( attempt == attempts )); then
