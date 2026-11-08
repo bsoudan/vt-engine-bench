@@ -663,25 +663,32 @@ func (s *Screen) drawASCII(data string, sid uint16) {
 		limit = s.rightMargin
 	}
 	autowrap := s.isModeSet(ModeDECAWM)
-	line := s.rows[s.Cursor.Row]
-	for i := 0; i < len(data); i++ {
+	for len(data) > 0 {
 		if s.wrapNext {
 			s.wrapNext = false
 			s.markWrapped(s.Cursor.Row, limit)
 			s.CarriageReturn()
 			s.LineFeed()
-			line = s.rows[s.Cursor.Row]
 		}
 		if s.Cursor.Col > limit {
 			s.Cursor.Col = limit
 		}
+		// The bytes that fit on this row from the cursor on, written in one
+		// pass; what is left wraps, or overwrites the last cell without
+		// autowrap, on the next.
+		line := s.rows[s.Cursor.Row]
 		col := s.Cursor.Col
-		if g := line[col]; g.text == 0 || g.text >= 0x80 || g.flags&flagGrapheme != 0 {
-			s.clearWidePairAt(line, col) // the cell may be half of a wide glyph
+		n := min(len(data), limit-col+1)
+		cells := line[col : col+n]
+		for i, g := range cells {
+			if g.text == 0 || g.text >= 0x80 || g.flags&flagGrapheme != 0 {
+				s.clearWidePairAt(line, col+i) // the cell may be half of a wide glyph
+			}
+			cells[i] = gcell{text: uint32(data[i]), style: sid}
 		}
-		line[col] = gcell{text: uint32(data[i]), style: sid}
-		s.lastDrawn = asciiCell[data[i]]
-		if next := col + 1; next > limit {
+		s.lastDrawn = asciiCell[data[n-1]]
+		data = data[n:]
+		if next := col + n; next > limit {
 			if autowrap {
 				s.wrapNext = true
 				s.Cursor.Col = limit + 1
@@ -738,9 +745,7 @@ func (s *Screen) Index() {
 			if kept {
 				spare = s.scrolledOff(spare) // the row is the history's; its evicted one is ours
 			}
-			for row := top; row < bottom; row++ {
-				s.rows[row] = s.rows[row+1]
-			}
+			copy(s.rows[top:bottom], s.rows[top+1:bottom+1])
 			s.rows[bottom] = s.refillLine(spare)
 		} else {
 			// DECLRMM: scroll only the columns inside the margins, like
