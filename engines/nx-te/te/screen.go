@@ -1024,6 +1024,7 @@ func (s *Screen) EraseInLine(how int, private bool, _ ...int) {
 		start = left
 		end = right + 1
 	}
+	blank := Cell{Data: " ", Attr: s.bceAttr()}
 	for col := start; col < end; col++ {
 		protected := line[col].Attr.ISOProtected
 		if private {
@@ -1032,7 +1033,7 @@ func (s *Screen) EraseInLine(how int, private bool, _ ...int) {
 		if protected {
 			continue
 		}
-		line[col] = Cell{Data: " ", Attr: s.bceAttr()}
+		line[col] = blank
 	}
 }
 
@@ -1068,6 +1069,7 @@ func (s *Screen) eraseInDisplay(how int, private bool, selective bool) {
 	if how == 0 || how == 1 {
 		s.EraseInLine(how, private)
 	}
+	blank := Cell{Data: " ", Attr: s.bceAttr()}
 	for row := start; row < end; row++ {
 		line := s.Buffer[row]
 		for col := 0; col < s.Columns; col++ {
@@ -1078,7 +1080,7 @@ func (s *Screen) eraseInDisplay(how int, private bool, selective bool) {
 			if protected {
 				continue
 			}
-			line[col] = Cell{Data: " ", Attr: s.bceAttr()}
+			line[col] = blank
 		}
 	}
 }
