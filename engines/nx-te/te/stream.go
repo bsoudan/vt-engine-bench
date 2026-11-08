@@ -252,6 +252,24 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 	i := 0 // where the loop stopped, after it: the end of an open run
 	for i < len(data) {
 		b := data[i]
+		if st.state == stateGround && b >= 0x20 && b < 0x7f {
+			// Printable ASCII at ground is plain text whatever follows: the
+			// whole run of it is taken in one scan.
+			j := i + 1
+			for j < len(data) && data[j] >= 0x20 && data[j] < 0x7f {
+				j++
+			}
+			if start < 0 {
+				start = i
+			}
+			if !raw {
+				for _, c := range []byte(data[i:j]) {
+					textBuf = append(textBuf, rune(c))
+				}
+			}
+			i = j
+			continue
+		}
 		var ch rune
 		size := 1
 		asIs := true // the bytes are the UTF-8 of ch
