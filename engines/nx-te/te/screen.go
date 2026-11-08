@@ -150,6 +150,10 @@ type Screen struct {
 		ok    bool
 	}
 
+	// blankTmpl is a row of blank cells to copy from (blankRowOf): an erase
+	// fills a row from it instead of a cell at a time.
+	blankTmpl []gcell
+
 	// hot is the state of the modes the hot paths read — for each cell
 	// drawn, each row scrolled, each blank cell made — as booleans, kept
 	// with Mode by modesChanged, so those paths don't look them up in it.
@@ -407,6 +411,25 @@ func (s *Screen) protected(g gcell, private bool) bool {
 		return a.Protected
 	}
 	return a.ISOProtected
+}
+
+// rowProtected says whether any cell of line is guarded against the erase.
+func (s *Screen) rowProtected(line []gcell, private bool) bool {
+	for _, g := range line {
+		if g.style != 0 && s.protected(g, private) {
+			return true
+		}
+	}
+	return false
+}
+
+// blankRowOf is a row of the screen's width of cell, to copy from, never to
+// hold: the one kept is remade when the width or the cell differs.
+func (s *Screen) blankRowOf(cell gcell) []gcell {
+	if len(s.blankTmpl) != s.Columns || (s.Columns > 0 && s.blankTmpl[0] != cell) {
+		s.blankTmpl = blankLine(s.Columns, cell)
+	}
+	return s.blankTmpl
 }
 
 // Draw renders text at the current cursor position.
@@ -1117,8 +1140,13 @@ func (s *Screen) eraseInDisplay(how int, private bool, selective bool) {
 		s.EraseInLine(how, private)
 	}
 	blank := s.blankOf(s.bceAttr())
+	tmpl := s.blankRowOf(blank)
 	for row := start; row < end; row++ {
 		line := s.rows[row]
+		if !s.rowProtected(line, private) {
+			copy(line, tmpl) // the whole row at once: most rows guard nothing
+			continue
+		}
 		for col := 0; col < s.Columns; col++ {
 			if s.protected(line[col], private) {
 				continue
