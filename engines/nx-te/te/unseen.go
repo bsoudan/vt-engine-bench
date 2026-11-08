@@ -25,16 +25,11 @@ func (h *ScrollbackScreen) Apply(d cell.Delta) error {
 	if d.Whole && (d.Cols != h.Columns || d.Rows != h.Lines) && d.Cols > 0 && d.Rows > 0 {
 		h.Screen.Resize(d.Rows, d.Cols)
 	}
-	buf, err := d.Apply(h.Rows(), func(row []Cell, unseen bool) {
-		if unseen {
-			h.markUnseen(h.scrollback.TotalAdded)
-		}
-		h.keepScrolledOff(h.packRow(row))
-	})
+	rows, err := h.applyDelta(h.rows, d)
 	if err != nil {
 		return err
 	}
-	h.rows = h.packRows(buf)
+	h.rows = rows
 	return nil
 }
 

@@ -37,7 +37,6 @@ func (h *ScrollbackScreen) MarshalState() *ScrollbackState {
 // this, the caller must re-set WriteProcessInput and create a new Stream.
 func (h *ScrollbackScreen) UnmarshalState(st *ScrollbackState) {
 	h.Screen.scrolledOff = h.keepScrolledOff
-	h.Screen.moreRows = h.historyRows
 	h.Screen.UnmarshalState(&st.Screen)
 
 	rows, first := st.TopItems, st.FirstSeq

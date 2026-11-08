@@ -1,10 +1,6 @@
 package te
 
-import (
-	"slices"
-
-	"nx/cell"
-)
+import "nx/cell"
 
 // Deltas cuts a screen's deltas (cell.Delta; doc/done/DELTA_PLAN.md): what
 // changed on it since the last cut, as the scrolls that happened and then
@@ -30,19 +26,18 @@ import (
 // One owner, as the screen has: Deltas is not safe for concurrent use.
 type Deltas struct {
 	screen *Screen
-	model  cell.Differ
+	model  gmodel // the screen as the shadows have it, in the screen's own cells
 	// kept is the rows the screen's history took since the last cut, as
 	// its history scrolls told them.
 	kept int
-	// scratch holds a screen row as cells while scrolled compares it.
-	scratch []Cell
 }
 
 // NewDeltas cuts s's deltas: it takes s's Scrolled hook. Its first cut is
 // whole.
 func NewDeltas(s *Screen) *Deltas {
-	d := &Deltas{screen: s}
+	d := &Deltas{screen: s, model: gmodel{s: s}}
 	s.Scrolled = d.scrolled
+	s.moreRows = append(s.moreRows, d.model.rows) // the model's cells index the screen's tables
 	return d
 }
 
@@ -51,7 +46,7 @@ func NewDeltas(s *Screen) *Deltas {
 // changed. A whole one begins with a history scroll of the rows the
 // history took since the last cut, every one unseen.
 func (d *Deltas) Cut() cell.Delta {
-	out := d.model.Delta(d.screen.Rows(), nil)
+	out := d.model.Delta(d.screen.rows)
 	if out.Whole && d.kept > 0 && out.Rows > 0 {
 		s := cell.Scroll{Bottom: out.Rows - 1, N: d.kept, History: true, Unseen: []cell.Rows{{N: d.kept}}}
 		out.Scrolls = append([]cell.Scroll{s}, out.Scrolls...)
@@ -64,7 +59,7 @@ func (d *Deltas) Cut() cell.Delta {
 // after a resize, which each shadow applies itself, by the same reflow on
 // the same cells (Decided 7). Cut what came before first.
 func (d *Deltas) Reset() {
-	d.model.Reset(d.screen.Rows())
+	d.model.Reset(d.screen.rows)
 	d.kept = 0
 }
 
@@ -96,15 +91,14 @@ func (d *Deltas) scrolled(top, bottom, n int, history bool) {
 	if history {
 		d.kept += n
 	}
-	held := d.model.Held()
+	held := d.model.grid
 	if len(held) != d.screen.Lines || len(held) == 0 || len(held[0]) != d.screen.Columns {
 		return // a size the model is not: the cut is whole
 	}
 	var unseen []cell.Rows
 	if history {
 		for i := range n {
-			d.scratch = d.screen.unpackRow(d.screen.rows[top+i], d.scratch)
-			if slices.Equal(d.scratch, held[top+i]) {
+			if sameRow(d.screen.rows[top+i], held[top+i]) {
 				continue
 			}
 			if k := len(unseen); k > 0 && unseen[k-1].From+unseen[k-1].N == i {

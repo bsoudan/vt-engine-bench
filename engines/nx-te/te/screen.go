@@ -137,11 +137,11 @@ type Screen struct {
 	altActive      bool
 	altSavedCursor *Cursor
 
-	// tables is what the cells index into (gcell.go); moreRows, if set, is
-	// the rows beyond the screen's own that index into them too, a
-	// ScrollbackScreen's history, for compactTables.
+	// tables is what the cells index into (gcell.go); moreRows says the
+	// rows beyond the screen's own that index into them too — a
+	// ScrollbackScreen's history, a Deltas model — for compactTables.
 	tables   cellTables
-	moreRows func() [][]gcell
+	moreRows []func() [][]gcell
 
 	// identity remembers whether the charset table last asked about maps
 	// every character to itself (charsetIdentity).

@@ -74,7 +74,7 @@ func NewScrollbackScreen(cols, lines, history int) *ScrollbackScreen {
 	h := &ScrollbackScreen{scrollback: Scrollback{Top: scrollbackDeque{max: history}}}
 	h.Screen = newScreen(cols, lines)
 	h.Screen.scrolledOff = h.keepScrolledOff
-	h.Screen.moreRows = h.historyRows
+	h.Screen.moreRows = append(h.Screen.moreRows, h.historyRows)
 	if screenMade != nil {
 		screenMade(h.Screen, h)
 	}

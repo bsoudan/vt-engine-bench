@@ -62,6 +62,30 @@ type Rows struct {
 	N    int `json:",omitempty"`
 }
 
+// checkIn says whether s is well made for a grid of cols×rows: inside it,
+// a history scroll the whole screen's and upward, its unseen runs in order
+// and within it.
+func (s Scroll) checkIn(cols, rows int) error {
+	if s.Top < 0 || s.Bottom >= rows || s.Top > s.Bottom || s.N == 0 || s.N < -maxCells || s.N > maxCells {
+		return fmt.Errorf("%w: a scroll of rows %d..%d by %d in %d", ErrDelta, s.Top, s.Bottom, s.N, rows)
+	}
+	// A history scroll is that many rows kept, or put on a canvas.
+	if s.History && (s.Top != 0 || s.Bottom != rows-1 || s.N < 0 || s.N > maxCells/max(cols, 1)) {
+		return fmt.Errorf("%w: a history scroll of rows %d..%d by %d", ErrDelta, s.Top, s.Bottom, s.N)
+	}
+	if s.Unseen != nil && !s.History {
+		return fmt.Errorf("%w: rows unseen off a scroll that keeps none", ErrDelta)
+	}
+	next := 0
+	for _, r := range s.Unseen {
+		if r.From < next || r.N <= 0 || r.N > s.N || r.From > s.N-r.N {
+			return fmt.Errorf("%w: %d rows unseen from %d off a scroll of %d", ErrDelta, r.N, r.From, s.N)
+		}
+		next = r.From + r.N
+	}
+	return nil
+}
+
 // unseen says whether row i of the rows s moves off is one Unseen says.
 func (s Scroll) unseen(i int) bool {
 	for _, r := range s.Unseen {
@@ -130,22 +154,8 @@ func (d Delta) check() error {
 		return fmt.Errorf("%w: a size of %dx%d", ErrDelta, d.Cols, d.Rows)
 	}
 	for _, s := range d.Scrolls {
-		if s.Top < 0 || s.Bottom >= d.Rows || s.Top > s.Bottom || s.N == 0 || s.N < -maxCells || s.N > maxCells {
-			return fmt.Errorf("%w: a scroll of rows %d..%d by %d in %d", ErrDelta, s.Top, s.Bottom, s.N, d.Rows)
-		}
-		// A history scroll is that many rows kept, or put on a canvas.
-		if s.History && (s.Top != 0 || s.Bottom != d.Rows-1 || s.N < 0 || s.N > maxCells/max(d.Cols, 1)) {
-			return fmt.Errorf("%w: a history scroll of rows %d..%d by %d", ErrDelta, s.Top, s.Bottom, s.N)
-		}
-		if s.Unseen != nil && !s.History {
-			return fmt.Errorf("%w: rows unseen off a scroll that keeps none", ErrDelta)
-		}
-		next := 0
-		for _, r := range s.Unseen {
-			if r.From < next || r.N <= 0 || r.N > s.N || r.From > s.N-r.N {
-				return fmt.Errorf("%w: %d rows unseen from %d off a scroll of %d", ErrDelta, r.N, r.From, s.N)
-			}
-			next = r.From + r.N
+		if err := s.checkIn(d.Cols, d.Rows); err != nil {
+			return err
 		}
 	}
 	before := len(d.Scrolls)

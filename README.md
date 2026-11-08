@@ -79,6 +79,19 @@ The same three runs ([CSV](results/2026-11-08-headless-alpha-nx-te-cells.csv)) a
 
 te now leads Ghostty on the 256-color scroll and matches it on the tmux recording, and trails it by two times on plain scroll and the TUI redraw; it is within two times of Alacritty everywhere but the tmux recording. What remains in the profiles is spread thin: hashing a 40-byte attribute to find its style index when the color changes every line, a byte-at-a-time CSI state machine against Ghostty's table-driven one and SIMD scan, and the memory moves of scrolling itself.
 
+#### The delta path with eight-byte cells
+
+nxterm does not read te's screen; it cuts a delta from it at paint rate (`te.Deltas`, the scrolls and then the cells that changed) and applies the delta to a shadow screen elsewhere. The cell change first made that path slower, because the model compared `cell.Cell` rows and so unpacked the whole screen on every cut and every apply, and the scroll hook unpacked a row on every scroll. The last commit makes the path native: the model is kept in the screen's own cells, a cut compares eight bytes a cell and unpacks only the cells of each span, and a shadow writes spans straight into its rows. Measured fed from Go in the bench's 8 KB chunks, a cut after each chunk applied to a shadow, medians of 21, ms for the whole workload:
+
+| Workload (cuts) | phase | nxterm v0.5.1 | 8-byte cells, before | native deltas |
+|---|---|---:|---:|---:|
+| plain scroll (96) | feed · cut · apply | 496 · 17 · 80 | 47 · 28 · 131 | 11 · 11 · 5 |
+| ANSI scroll (67) | feed · cut · apply | 287 · 10 · 74 | 51 · 19 · 122 | 16 · 5.6 · 5.4 |
+| TUI redraw (42) | feed · cut · apply | 111 · 4.6 · 0.3 | 10 · 11 · 14 | 10 · 1.5 · 0.3 |
+| tmux (32) | feed · cut · apply | 248 · 2.8 · 0.1 | 7.3 · 7.8 · 10.5 | 7.2 · 0.6 · 0.06 |
+
+A cut now costs a quarter to a third of the original's, an apply a sixteenth on the scrolls and the same or less on the small deltas, and the feed with the hook attached is twice the hook-free feed rather than nine times. The remaining cost of a cut is the delta's own content: on a scroll every row changed, so every row is unpacked into the runs the wire carries.
+
 ## GPUI window capture (Apple M1 Pro, 2026-10-08)
 
 Run `bash scripts/run_gpui_bench.sh` from a logged-in macOS desktop with Screen Recording permission (Linux: see below). It builds a **single shared GPUI text renderer** for all four engines, launches each in a visible window, and uses ScreenCaptureKit to observe a color marker changing alongside the rendered 120×40 tmux viewport. It feeds the committed tmux recording in 80 chunks at ~16 ms intervals, then dispatches 40 synthetic GPUI key events at ~40 ms intervals. The app checks that all four engines end with the same expected tmux viewport; a run is rejected if capture loses too many updates or timestamps do not align. No PTY, text attributes, cursor painting, hardware keyboard, or glyph-by-glyph screen validation is included in this rendering harness.

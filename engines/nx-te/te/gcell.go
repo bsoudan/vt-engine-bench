@@ -157,8 +157,8 @@ func (s *Screen) compactTables() {
 	}
 	remap(s.rows)
 	remap(s.altRows)
-	if s.moreRows != nil {
-		remap(s.moreRows())
+	for _, more := range s.moreRows {
+		remap(more())
 	}
 	s.tables.compacting = false
 }
