@@ -1,0 +1,5 @@
+locating the window on: monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary
+monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary: 1920x1080 BGRx, up to 119.88 frames/s, DMA-BUF via GL frames
+marker bar at (1782, 83) on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 97, 1920x1080)
+marker sampled on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 97, 1920x1080)
+captured 97 marker changes from 135 marker frames (145 PipeWire frames on monitor HDMI-1 at (0,0) scale 1 119.88 Hz primary (pipewire node 97, 1920x1080))
