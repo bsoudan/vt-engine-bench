@@ -3,6 +3,8 @@ package te
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/rivo/uniseg"
 )
 
 // A screen stores its cells as gcells, eight bytes each, as Ghostty does:
@@ -58,6 +60,7 @@ type cellTables struct {
 	graphemes   []string
 	graphemeIDs map[string]uint32
 	widths      map[gcell]int8 // the width of each text seen (widthOf)
+	standalone  map[rune]bool  // whether each character seen is a cluster on its own (standalone)
 	compacting  bool
 	lastAttr    Attr   // the Attr styleID was last asked about, and
 	lastID      uint16 // its index; 0 when none yet
@@ -158,6 +161,36 @@ func (s *Screen) compactTables() {
 		remap(s.moreRows())
 	}
 	s.tables.compacting = false
+}
+
+// standalone says r is a grapheme cluster on its own whatever stands beside
+// it, as long as that is standalone too or ASCII: it does not extend the
+// character before it (no combining mark, joiner, selector or modifier),
+// does not take the one after (no prepend), and is not one of the few that
+// pair with their own kind, a regional indicator or a Hangul jamo or
+// syllable. uniseg is asked once per character and the answer kept.
+func (s *Screen) standalone(r rune) bool {
+	switch {
+	case r < 0x80:
+		return r >= 0x20 && r < 0x7f
+	case r >= 0x1F1E6 && r <= 0x1F1FF: // regional indicators pair into flags
+		return false
+	case r >= 0x1100 && r <= 0x11FF, r >= 0xA960 && r <= 0xA97F, r >= 0xAC00 && r <= 0xD7FF: // Hangul
+		return false
+	}
+	t := &s.tables
+	if ok, known := t.standalone[r]; known {
+		return ok
+	}
+	if t.standalone == nil {
+		t.standalone = make(map[rune]bool)
+	}
+	str := string(r)
+	after, _, _, _ := uniseg.FirstGraphemeClusterInString("a"+str, -1)
+	before, _, _, _ := uniseg.FirstGraphemeClusterInString(str+"a", -1)
+	ok := after == "a" && before == str
+	t.standalone[r] = ok
+	return ok
 }
 
 // cellOf is the cell holding text, one grapheme cluster or "", in style.

@@ -19,6 +19,7 @@ func TestDrawASCIIMatchesGeneral(t *testing.T) {
 		"a", "Z", " ", "~", "0", "hello", "The quick brown fox",
 		"é", "e\u0301", "字", "漢字", "🙂", "\u0301", "αβγ", "👍🏽", "👨\u200d👩\u200d👧",
 		"x\u0301y", "ab字cd", "a\u200db", "❤\ufe0f",
+		"🇩🇪", "🇫🇷🇩🇪a", "한글", "\u1100\u1161\u11a8", "क्ष", "\u06001", "αβ\u0301γ", "日本語テキスト",
 	}
 	type step struct {
 		name string

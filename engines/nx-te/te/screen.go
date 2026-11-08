@@ -466,12 +466,31 @@ func (s *Screen) Draw(data string) {
 				continue
 			}
 		}
+		// A character that neither joins what came before nor takes what
+		// follows, followed by another such or by ASCII, is a cluster on its
+		// own: most non-ASCII text (standalone), drawn without asking uniseg.
+		if r, n := utf8.DecodeRuneInString(data); s.standalone(r) && (n == len(data) || s.boundaryAt(data[n:])) {
+			if !s.drawCluster(data[:n], sid) {
+				return
+			}
+			data = data[n:]
+			state = -1
+			continue
+		}
 		var cluster string
 		cluster, data, _, state = uniseg.FirstGraphemeClusterInString(data, state)
 		if !s.drawCluster(cluster, sid) {
 			return
 		}
 	}
+}
+
+// boundaryAt says a grapheme cluster ends before rest, given that the
+// character before rest is standalone: rest begins with printable ASCII or
+// with a standalone character.
+func (s *Screen) boundaryAt(rest string) bool {
+	r, _ := utf8.DecodeRuneInString(rest)
+	return (r >= 0x20 && r < 0x7f) || s.standalone(r)
 }
 
 // asciiRun is the length of data's leading run of printable ASCII bytes
