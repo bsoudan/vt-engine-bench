@@ -17,7 +17,7 @@ func TestStateBufferTrimRoundTrip(t *testing.T) {
 	if err := st.Feed("hi\r\n\x1b[44mX\x1b[0m"); err != nil {
 		t.Fatal(err)
 	}
-	orig := deepCopyBuffer(s.Buffer)
+	orig := deepCopyBuffer(s.Rows())
 
 	state := s.MarshalState()
 
@@ -35,15 +35,15 @@ func TestStateBufferTrimRoundTrip(t *testing.T) {
 	s2 := NewScreen(80, 24)
 	s2.UnmarshalState(state)
 
-	if len(s2.Buffer) != len(orig) {
-		t.Fatalf("restored %d rows, want %d", len(s2.Buffer), len(orig))
+	if len(s2.Rows()) != len(orig) {
+		t.Fatalf("restored %d rows, want %d", len(s2.Rows()), len(orig))
 	}
 	for r := range orig {
-		if len(s2.Buffer[r]) != 80 {
-			t.Fatalf("row %d restored width %d, want 80 (not re-padded)", r, len(s2.Buffer[r]))
+		if len(s2.Rows()[r]) != 80 {
+			t.Fatalf("row %d restored width %d, want 80 (not re-padded)", r, len(s2.Rows()[r]))
 		}
-		if !reflect.DeepEqual(s2.Buffer[r], orig[r]) {
-			t.Fatalf("row %d mismatch after round-trip:\n got %+v\nwant %+v", r, s2.Buffer[r], orig[r])
+		if !reflect.DeepEqual(s2.Rows()[r], orig[r]) {
+			t.Fatalf("row %d mismatch after round-trip:\n got %+v\nwant %+v", r, s2.Rows()[r], orig[r])
 		}
 	}
 }

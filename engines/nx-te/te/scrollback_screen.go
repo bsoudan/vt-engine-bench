@@ -1,14 +1,14 @@
 package te
 
 type scrollbackDeque struct {
-	items [][]Cell
+	items [][]gcell
 	max   int
 }
 
 // append adds line to the end. Returns true if an existing row was evicted
 // from the front because the deque was at capacity — callers that track
 // seq numbers (Top deque in ScrollbackScreen) bump FirstSeq on eviction.
-func (d *scrollbackDeque) append(line []Cell) (evicted []Cell, ok bool) {
+func (d *scrollbackDeque) append(line []gcell) (evicted []gcell, ok bool) {
 	if d.max == 0 {
 		return line, false // not kept: the caller may reuse it
 	}
@@ -74,6 +74,7 @@ func NewScrollbackScreen(cols, lines, history int) *ScrollbackScreen {
 	h := &ScrollbackScreen{scrollback: Scrollback{Top: scrollbackDeque{max: history}}}
 	h.Screen = newScreen(cols, lines)
 	h.Screen.scrolledOff = h.keepScrolledOff
+	h.Screen.moreRows = h.historyRows
 	if screenMade != nil {
 		screenMade(h.Screen, h)
 	}
@@ -109,7 +110,7 @@ func (h *ScrollbackScreen) clearScrollback() {
 // a seq of its own. The Screen calls it (Screen.scrolledOff) for every scroll
 // of the whole primary screen, however the scroll was reached: a line
 // wrapping on the bottom row scrolls inside Screen.Draw.
-func (h *ScrollbackScreen) keepScrolledOff(row []Cell) []Cell {
+func (h *ScrollbackScreen) keepScrolledOff(row []gcell) []gcell {
 	spare, evicted := h.scrollback.Top.append(row)
 	if evicted {
 		h.scrollback.FirstSeq++
@@ -119,13 +120,14 @@ func (h *ScrollbackScreen) keepScrolledOff(row []Cell) []Cell {
 }
 
 // ScrollbackRows returns the retained scrolled-off rows, oldest first — the
-// content above the live Buffer. The returned rows are the live backing slices
-// (read-only); callers must not mutate them, and a row the history lets go of
-// when full becomes the screen's next blank row (Screen.Index), so a caller
-// holds none past the next scroll. TotalAdded()/Scrollback() give the
-// seq anchor and count for view-level scrollback that pins its offset so live
-// output doesn't drift the viewport.
-func (h *ScrollbackScreen) ScrollbackRows() [][]Cell { return h.scrollback.Top.items }
+// content above the live screen — as cells, a copy the caller owns.
+// TotalAdded()/Scrollback() give the seq anchor and count for view-level
+// scrollback that pins its offset so live output doesn't drift the viewport.
+func (h *ScrollbackScreen) ScrollbackRows() [][]Cell { return h.unpackRows(h.scrollback.Top.items) }
+
+// historyRows is the history's rows as stored, for Screen.moreRows: they
+// index the screen's tables too.
+func (h *ScrollbackScreen) historyRows() [][]gcell { return h.scrollback.Top.items }
 
 // Scrollback returns the number of lines in the scrollback buffer.
 func (h *ScrollbackScreen) Scrollback() int {
@@ -169,7 +171,7 @@ func (h *ScrollbackScreen) Resize(lines, columns int) {
 	if columns <= 0 {
 		columns = 1
 	}
-	if h.Buffer == nil {
+	if h.rows == nil {
 		h.Screen.Resize(lines, columns)
 		return
 	}
@@ -190,20 +192,20 @@ func (h *ScrollbackScreen) Resize(lines, columns int) {
 	if lines < h.Lines {
 		drop := h.Lines - lines
 		for drop > 0 {
-			last := len(h.Buffer) - 1
-			if last <= h.Cursor.Row || !blankRow(h.Buffer[last]) {
+			last := len(h.rows) - 1
+			if last <= h.Cursor.Row || !blankRow(h.rows[last]) {
 				break
 			}
-			h.Buffer = h.Buffer[:last]
+			h.rows = h.rows[:last]
 			drop--
 		}
 		for i := 0; i < drop; i++ {
-			if _, evicted := h.scrollback.Top.append(h.Buffer[i]); evicted {
+			if _, evicted := h.scrollback.Top.append(h.rows[i]); evicted {
 				h.scrollback.FirstSeq++
 			}
 			h.scrollback.TotalAdded++
 		}
-		h.Buffer = h.Buffer[drop:]
+		h.rows = h.rows[drop:]
 		if h.Cursor.Row >= drop {
 			h.Cursor.Row -= drop
 		} else {
@@ -212,12 +214,12 @@ func (h *ScrollbackScreen) Resize(lines, columns int) {
 	}
 
 	// Column changes: truncate or pad each remaining row.
-	fitRowsWidth(h.Buffer, columns, h.defaultCell())
+	fitRowsWidth(h.rows, columns, h.blankCell())
 
 	// Grow vertically: append blank rows at the bottom.
 	if lines > h.Lines {
 		for i := 0; i < lines-h.Lines; i++ {
-			h.Buffer = append(h.Buffer, blankLine(columns, h.defaultCell()))
+			h.rows = append(h.rows, blankLine(columns, h.blankCell()))
 		}
 	}
 
@@ -244,34 +246,34 @@ func (h *ScrollbackScreen) Resize(lines, columns int) {
 // Screen.Resize — alt-screen programs repaint on resize anyway.
 func (h *ScrollbackScreen) resizeInactiveBuffer(lines, columns int) {
 	if !h.altActive {
-		if h.altBuffer != nil {
-			h.altBuffer = makeBlankCells(lines, columns)
+		if h.altRows != nil {
+			h.altRows = makeBlankCells(lines, columns)
 			h.altWrapNext = false
 		}
 		return
 	}
 
-	if lines < len(h.altBuffer) {
-		drop := len(h.altBuffer) - lines
+	if lines < len(h.altRows) {
+		drop := len(h.altRows) - lines
 		savedRow := 0
 		if h.altSavedCursor != nil {
 			savedRow = h.altSavedCursor.Row
 		}
 		for drop > 0 {
-			last := len(h.altBuffer) - 1
-			if last <= savedRow || !blankRow(h.altBuffer[last]) {
+			last := len(h.altRows) - 1
+			if last <= savedRow || !blankRow(h.altRows[last]) {
 				break
 			}
-			h.altBuffer = h.altBuffer[:last]
+			h.altRows = h.altRows[:last]
 			drop--
 		}
 		for i := 0; i < drop; i++ {
-			if _, evicted := h.scrollback.Top.append(h.altBuffer[i]); evicted {
+			if _, evicted := h.scrollback.Top.append(h.altRows[i]); evicted {
 				h.scrollback.FirstSeq++
 			}
 			h.scrollback.TotalAdded++
 		}
-		h.altBuffer = h.altBuffer[drop:]
+		h.altRows = h.altRows[drop:]
 		if h.altSavedCursor != nil {
 			if h.altSavedCursor.Row >= drop {
 				h.altSavedCursor.Row -= drop
@@ -281,9 +283,9 @@ func (h *ScrollbackScreen) resizeInactiveBuffer(lines, columns int) {
 		}
 	}
 
-	fitRowsWidth(h.altBuffer, columns, h.defaultCell())
-	for len(h.altBuffer) < lines {
-		h.altBuffer = append(h.altBuffer, blankLine(columns, h.defaultCell()))
+	fitRowsWidth(h.altRows, columns, h.blankCell())
+	for len(h.altRows) < lines {
+		h.altRows = append(h.altRows, blankLine(columns, h.blankCell()))
 	}
 	h.altWrapNext = false
 }
@@ -296,11 +298,11 @@ func (h *ScrollbackScreen) resizeInactiveBuffer(lines, columns int) {
 // there is reflowed with the cursor saved on entering it; the alt screen
 // itself is fitted, not reflowed: a full-screen program repaints.
 func (h *ScrollbackScreen) reflowResize(lines, columns int) {
-	blank := h.defaultCell()
+	blank := h.blankCell()
 
-	primary, cursor, saves, wrapNext := h.Buffer, &h.Cursor, h.Savepoints, h.wrapNext
+	primary, cursor, saves, wrapNext := h.rows, &h.Cursor, h.Savepoints, h.wrapNext
 	if h.altActive {
-		primary, cursor, saves, wrapNext = h.altBuffer, h.altSavedCursor, h.altSavepoints, h.altWrapNext
+		primary, cursor, saves, wrapNext = h.altRows, h.altSavedCursor, h.altSavepoints, h.altWrapNext
 	}
 	var marks []*reflowMark
 	if cursor != nil {
@@ -328,24 +330,24 @@ func (h *ScrollbackScreen) reflowResize(lines, columns int) {
 	h.scrollback.TotalAdded = total + uint64(len(hist))
 
 	if h.altActive {
-		h.altBuffer, h.altWrapNext = screen, wrapNext
+		h.altRows, h.altWrapNext = screen, wrapNext
 		if h.Cursor.Row >= lines { // the alt screen: its top goes, so the cursor stays on it
-			h.Buffer = h.Buffer[h.Cursor.Row-lines+1:]
+			h.rows = h.rows[h.Cursor.Row-lines+1:]
 			h.Cursor.Row = lines - 1
 		}
-		if len(h.Buffer) > lines {
-			h.Buffer = h.Buffer[:lines]
+		if len(h.rows) > lines {
+			h.rows = h.rows[:lines]
 		}
-		fitRowsWidth(h.Buffer, columns, blank)
-		for len(h.Buffer) < lines {
-			h.Buffer = append(h.Buffer, blankLine(columns, blank))
+		fitRowsWidth(h.rows, columns, blank)
+		for len(h.rows) < lines {
+			h.rows = append(h.rows, blankLine(columns, blank))
 		}
 		h.Cursor.Col = min(h.Cursor.Col, columns-1)
 		h.wrapNext = false
 	} else {
-		h.Buffer, h.wrapNext = screen, wrapNext
-		if h.altBuffer != nil {
-			h.altBuffer = makeBlankCells(lines, columns)
+		h.rows, h.wrapNext = screen, wrapNext
+		if h.altRows != nil {
+			h.altRows = makeBlankCells(lines, columns)
 			h.altWrapNext = false
 		}
 	}

@@ -18,9 +18,9 @@ func TestBackColorErase(t *testing.T) {
 	}
 
 	s.EraseInDisplay(2, false)
-	for r := range s.Buffer {
-		for c := range s.Buffer[r] {
-			cell := s.Buffer[r][c]
+	for r := range s.Rows() {
+		for c := range s.Rows()[r] {
+			cell := s.Rows()[r][c]
 			if cell.Attr.Bg != wantBg {
 				t.Fatalf("cell (%d,%d) bg = %+v, want current bg %+v (no back-color-erase)",
 					r, c, cell.Attr.Bg, wantBg)
@@ -41,9 +41,9 @@ func TestBackColorEraseInLine(t *testing.T) {
 	wantBg := s.Cursor.Attr.Bg
 
 	s.EraseInLine(2, false)
-	for c := range s.Buffer[0] {
-		if s.Buffer[0][c].Attr.Bg != wantBg {
-			t.Fatalf("EraseInLine cell %d bg = %+v, want %+v", c, s.Buffer[0][c].Attr.Bg, wantBg)
+	for c := range s.Rows()[0] {
+		if s.Rows()[0][c].Attr.Bg != wantBg {
+			t.Fatalf("EraseInLine cell %d bg = %+v, want %+v", c, s.Rows()[0][c].Attr.Bg, wantBg)
 		}
 	}
 
@@ -51,9 +51,9 @@ func TestBackColorEraseInLine(t *testing.T) {
 	s2.SelectGraphicRendition([]int{44}, false)
 	wantBg2 := s2.Cursor.Attr.Bg
 	s2.EraseCharacters(5)
-	for c := range s2.Buffer[0] {
-		if s2.Buffer[0][c].Attr.Bg != wantBg2 {
-			t.Fatalf("EraseCharacters cell %d bg = %+v, want %+v", c, s2.Buffer[0][c].Attr.Bg, wantBg2)
+	for c := range s2.Rows()[0] {
+		if s2.Rows()[0][c].Attr.Bg != wantBg2 {
+			t.Fatalf("EraseCharacters cell %d bg = %+v, want %+v", c, s2.Rows()[0][c].Attr.Bg, wantBg2)
 		}
 	}
 }
@@ -65,11 +65,11 @@ func TestEraseWithDefaultPenStaysDefault(t *testing.T) {
 	t.Parallel()
 	s := NewScreen(5, 2)
 	s.EraseInDisplay(2, false)
-	for r := range s.Buffer {
-		for c := range s.Buffer[r] {
-			if s.Buffer[r][c] != s.defaultCell() {
+	for r := range s.Rows() {
+		for c := range s.Rows()[r] {
+			if s.Rows()[r][c] != s.defaultCell() {
 				t.Fatalf("default-pen erase produced a non-default cell at (%d,%d): %+v",
-					r, c, s.Buffer[r][c])
+					r, c, s.Rows()[r][c])
 			}
 		}
 	}

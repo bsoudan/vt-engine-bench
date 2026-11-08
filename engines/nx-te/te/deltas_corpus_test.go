@@ -215,12 +215,12 @@ func (w *watched) total() uint64 {
 }
 
 func (w *watched) check() {
-	if !reflect.DeepEqual(w.grid, w.s.Buffer) {
-		w.fail("the grid is not the screen:\ngrid\n%sscreen\n%s", showRows(w.grid), showRows(w.s.Buffer))
+	if !reflect.DeepEqual(w.grid, w.s.Rows()) {
+		w.fail("the grid is not the screen:\ngrid\n%sscreen\n%s", showRows(w.grid), showRows(w.s.Rows()))
 		return
 	}
-	if !reflect.DeepEqual(w.canvas[w.top:], w.s.Buffer) {
-		w.fail("the canvas's screen is not the screen:\ncanvas\n%sscreen\n%s", showRows(w.canvas[w.top:]), showRows(w.s.Buffer))
+	if !reflect.DeepEqual(w.canvas[w.top:], w.s.Rows()) {
+		w.fail("the canvas's screen is not the screen:\ncanvas\n%sscreen\n%s", showRows(w.canvas[w.top:]), showRows(w.s.Rows()))
 		return
 	}
 	if w.h == nil {
@@ -232,7 +232,7 @@ func (w *watched) check() {
 		w.canvasSeq = total + 1 // and the canvas re-taken with it
 	}
 	if w.canvasSeq+uint64(w.top) != total {
-		w.canvas = append(cloneRows(kept), cloneRows(w.s.Buffer)...)
+		w.canvas = append(cloneRows(kept), cloneRows(w.s.Rows())...)
 		w.top, w.canvasSeq = len(kept), first
 	}
 	if first > w.histFirst { // what the screen forgot, the shadows may too

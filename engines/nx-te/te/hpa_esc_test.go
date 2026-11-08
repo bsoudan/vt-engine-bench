@@ -11,7 +11,7 @@ func TestHPAThenESCSameFeed(t *testing.T) {
 	screen := NewScreen(20, 2)
 	stream := NewStream(screen)
 	stream.Feed("\x1b[5'\x1b[31mX")
-	if screen.Buffer[0][4].Data != "X" {
+	if screen.Rows()[0][4].Data != "X" {
 		t.Fatalf("HPA dropped before ESC: expected X at col 4, row=%q", screen.Display()[0])
 	}
 }

@@ -91,8 +91,8 @@ func TestResizeShrinkNoCrash(t *testing.T) {
 	if screen.Lines != 5 {
 		t.Fatalf("Lines = %d, want 5", screen.Lines)
 	}
-	if len(screen.Buffer) != screen.Lines {
-		t.Fatalf("len(Buffer) = %d, want %d (Lines) — buffer not truncated on shrink", len(screen.Buffer), screen.Lines)
+	if len(screen.Rows()) != screen.Lines {
+		t.Fatalf("len(Buffer) = %d, want %d (Lines) — buffer not truncated on shrink", len(screen.Rows()), screen.Lines)
 	}
 	if screen.Cursor.Row >= screen.Lines {
 		t.Fatalf("cursor row %d out of range for %d lines", screen.Cursor.Row, screen.Lines)
@@ -229,12 +229,12 @@ func TestHistoryResizeGrowWhileAltScreenActive(t *testing.T) {
 	screen.Resize(6, 7)
 
 	screen.ResetMode([]int{ModeAltBufCursor}, false)
-	if len(screen.Buffer) != screen.Lines {
-		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Buffer), screen.Lines)
+	if len(screen.Rows()) != screen.Lines {
+		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Rows()), screen.Lines)
 	}
-	for row := range screen.Buffer {
-		if len(screen.Buffer[row]) != screen.Columns {
-			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Buffer[row]), screen.Columns)
+	for row := range screen.Rows() {
+		if len(screen.Rows()[row]) != screen.Columns {
+			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Rows()[row]), screen.Columns)
 		}
 	}
 	screen.Display()
@@ -257,8 +257,8 @@ func TestHistoryResizeShrinkWhileAltScreenActive(t *testing.T) {
 	screen.Resize(2, 5)
 
 	screen.ResetMode([]int{ModeAltBufCursor}, false)
-	if len(screen.Buffer) != screen.Lines {
-		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Buffer), screen.Lines)
+	if len(screen.Rows()) != screen.Lines {
+		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Rows()), screen.Lines)
 	}
 	if screen.Scrollback() != 2 {
 		t.Fatalf("shrink pushed %d rows into history, want 2", screen.Scrollback())

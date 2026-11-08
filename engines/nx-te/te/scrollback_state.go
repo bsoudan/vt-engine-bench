@@ -25,7 +25,7 @@ type ScrollbackState struct {
 func (h *ScrollbackScreen) MarshalState() *ScrollbackState {
 	return &ScrollbackState{
 		Screen:     *h.Screen.MarshalState(),
-		TopItems:   trimBuffer(h.scrollback.Top.items),
+		TopItems:   trimBuffer(h.unpackRows(h.scrollback.Top.items)),
 		TotalAdded: h.scrollback.TotalAdded,
 		FirstSeq:   h.scrollback.FirstSeq,
 	}
@@ -37,16 +37,18 @@ func (h *ScrollbackScreen) MarshalState() *ScrollbackState {
 // this, the caller must re-set WriteProcessInput and create a new Stream.
 func (h *ScrollbackScreen) UnmarshalState(st *ScrollbackState) {
 	h.Screen.scrolledOff = h.keepScrolledOff
+	h.Screen.moreRows = h.historyRows
 	h.Screen.UnmarshalState(&st.Screen)
 
 	rows, first := st.TopItems, st.FirstSeq
 	if over := len(rows) - h.scrollback.Top.max; over > 0 {
 		rows, first = rows[over:], first+uint64(over)
 	}
-	h.scrollback.Top.items = deepCopyBuffer(rows)
+	items := deepCopyBuffer(rows)
 	// Re-pad history rows that trimBuffer shortened on the way out (the Screen
 	// is restored above, so Columns and the default cell are available).
-	padRowsToColumns(h.scrollback.Top.items, h.Screen.Columns, h.Screen.defaultCell())
+	padRowsToColumns(items, h.Screen.Columns, h.Screen.defaultCell())
+	h.scrollback.Top.items = h.packRows(items)
 	h.scrollback.TotalAdded = st.TotalAdded
 	h.scrollback.FirstSeq = first
 	h.unseen = nil // a snapshot's history is whole

@@ -34,6 +34,8 @@ type Deltas struct {
 	// kept is the rows the screen's history took since the last cut, as
 	// its history scrolls told them.
 	kept int
+	// scratch holds a screen row as cells while scrolled compares it.
+	scratch []Cell
 }
 
 // NewDeltas cuts s's deltas: it takes s's Scrolled hook. Its first cut is
@@ -49,7 +51,7 @@ func NewDeltas(s *Screen) *Deltas {
 // changed. A whole one begins with a history scroll of the rows the
 // history took since the last cut, every one unseen.
 func (d *Deltas) Cut() cell.Delta {
-	out := d.model.Delta(d.screen.Buffer, nil)
+	out := d.model.Delta(d.screen.Rows(), nil)
 	if out.Whole && d.kept > 0 && out.Rows > 0 {
 		s := cell.Scroll{Bottom: out.Rows - 1, N: d.kept, History: true, Unseen: []cell.Rows{{N: d.kept}}}
 		out.Scrolls = append([]cell.Scroll{s}, out.Scrolls...)
@@ -62,7 +64,7 @@ func (d *Deltas) Cut() cell.Delta {
 // after a resize, which each shadow applies itself, by the same reflow on
 // the same cells (Decided 7). Cut what came before first.
 func (d *Deltas) Reset() {
-	d.model.Reset(d.screen.Buffer)
+	d.model.Reset(d.screen.Rows())
 	d.kept = 0
 }
 
@@ -101,7 +103,8 @@ func (d *Deltas) scrolled(top, bottom, n int, history bool) {
 	var unseen []cell.Rows
 	if history {
 		for i := range n {
-			if slices.Equal(d.screen.Buffer[top+i], held[top+i]) {
+			d.scratch = d.screen.unpackRow(d.screen.rows[top+i], d.scratch)
+			if slices.Equal(d.scratch, held[top+i]) {
 				continue
 			}
 			if k := len(unseen); k > 0 && unseen[k-1].From+unseen[k-1].N == i {

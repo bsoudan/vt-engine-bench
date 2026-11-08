@@ -24,8 +24,8 @@ type reflowMark struct {
 // screen starts there, unless what is below it no longer fits, and then it
 // is the last lines rows of it, the cursor on it. histMax bounds the
 // history, its oldest rows dropped.
-func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks []*reflowMark) (newHist, newScreen [][]Cell) {
-	all := make([][]Cell, 0, len(hist)+len(screen))
+func reflow(hist, screen [][]gcell, cols, lines, histMax int, blank gcell, marks []*reflowMark) (newHist, newScreen [][]gcell) {
+	all := make([][]gcell, 0, len(hist)+len(screen))
 	all = append(all, hist...)
 	all = append(all, screen...)
 	h := len(hist)
@@ -59,23 +59,23 @@ func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks [
 		}
 	}
 
-	var logical [][]Cell
-	var cur []Cell
+	var logical [][]gcell
+	var cur []gcell
 	for i, row := range all {
 		for k, m := range every {
 			if m != nil && h+m.row == i {
 				at[k] = place{line: len(logical), off: len(cur) + m.col}
 			}
 		}
-		wrapped := len(row) > 0 && row[len(row)-1].Wrapped && i < last
+		wrapped := len(row) > 0 && row[len(row)-1].wrapped() && i < last
 		n := len(row)
 		if wrapped {
-			for n > 0 && row[n-1].Empty {
+			for n > 0 && row[n-1].empty() {
 				n-- // space the line never filled
 			}
 		}
 		for _, c := range row[:n] {
-			c.Wrapped, c.Empty = false, false
+			c.flags &^= flagWrapped | flagEmpty
 			cur = append(cur, c)
 		}
 		if !wrapped {
@@ -94,7 +94,7 @@ func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks [
 	}
 	for i, l := range logical {
 		n := len(l)
-		for n > need[i] && l[n-1].Blank() {
+		for n > need[i] && l[n-1].blank() {
 			n--
 		}
 		for n < need[i] {
@@ -107,29 +107,29 @@ func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks [
 	// Each line again, cols wide; where every cell of it went, and the
 	// place just past its end.
 	type rc struct{ row, col int }
-	var rows [][]Cell
+	var rows [][]gcell
 	starts := make([]int, len(logical))
 	moved := make([][]rc, len(logical))
 	for i, l := range logical {
 		starts[i] = len(rows)
 		where := make([]rc, len(l)+1)
-		var row []Cell
+		var row []gcell
 		flush := func(wrapped bool) {
 			if wrapped {
 				for len(row) < cols {
 					c := blank
-					c.Empty = true
+					c.flags |= flagEmpty
 					row = append(row, c)
 				}
-				row[len(row)-1].Wrapped = true
+				row[len(row)-1].flags |= flagWrapped
 			}
 			rows = append(rows, row)
-			row = make([]Cell, 0, cols)
+			row = make([]gcell, 0, cols)
 		}
-		row = make([]Cell, 0, cols)
+		row = make([]gcell, 0, cols)
 		for j := 0; j < len(l); {
 			w := 1
-			if j+1 < len(l) && l[j].Data != "" && l[j+1].Data == "" && cols >= 2 {
+			if j+1 < len(l) && l[j].text != 0 && l[j+1].text == 0 && cols >= 2 {
 				w = 2 // a wide glyph and the placeholder after it
 			}
 			if len(row)+w > cols {
@@ -185,7 +185,7 @@ func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks [
 	if len(newHist) > histMax {
 		newHist = newHist[len(newHist)-histMax:]
 	}
-	newScreen = make([][]Cell, 0, lines)
+	newScreen = make([][]gcell, 0, lines)
 	newScreen = append(newScreen, rows[start:min(len(rows), start+lines)]...)
 	for len(newScreen) < lines {
 		newScreen = append(newScreen, blankLine(cols, blank))
@@ -196,16 +196,4 @@ func reflow(hist, screen [][]Cell, cols, lines, histMax int, blank Cell, marks [
 		}
 	}
 	return newHist, newScreen
-}
-
-// blankRow says a row has nothing written on it: every cell Blank. A row
-// with a colored background, say, is not blank, and is kept rather than
-// trimmed.
-func blankRow(row []Cell) bool {
-	for _, c := range row {
-		if !c.Blank() {
-			return false
-		}
-	}
-	return true
 }

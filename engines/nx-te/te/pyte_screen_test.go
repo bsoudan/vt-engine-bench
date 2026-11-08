@@ -857,7 +857,7 @@ func TestPyteTestScreenInsertCharacters(t *testing.T) {
 	if screen.Cursor != cursor {
 		t.Fatalf("expected cursor unchanged")
 	}
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		screen.defaultCell(),
 		cellWith(screen, "s", withFg("red")),
@@ -866,7 +866,7 @@ func TestPyteTestScreenInsertCharacters(t *testing.T) {
 	screen.Cursor.Row = 2
 	screen.Cursor.Col = 1
 	screen.InsertCharacters(1)
-	assertCellsEqual(t, [][]Cell{screen.Buffer[2]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[2]}, [][]Cell{{
 		cellWith(screen, "f"),
 		screen.defaultCell(),
 		cellWith(screen, "o"),
@@ -875,7 +875,7 @@ func TestPyteTestScreenInsertCharacters(t *testing.T) {
 	screen.Cursor.Row = 3
 	screen.Cursor.Col = 1
 	screen.InsertCharacters(10)
-	assertCellsEqual(t, [][]Cell{screen.Buffer[3]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[3]}, [][]Cell{{
 		cellWith(screen, "b"),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -884,7 +884,7 @@ func TestPyteTestScreenInsertCharacters(t *testing.T) {
 	screen = updateScreen(NewScreen(3, 3), []string{"sam", "is ", "foo"}, []int{0})
 	screen.CursorPosition(0, 0)
 	screen.InsertCharacters(1)
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		cellWith(screen, "s", withFg("red")),
 		cellWith(screen, "a", withFg("red")),
@@ -893,7 +893,7 @@ func TestPyteTestScreenInsertCharacters(t *testing.T) {
 	screen = updateScreen(NewScreen(3, 3), []string{"sam", "is ", "foo"}, []int{0})
 	screen.CursorPosition(0, 0)
 	screen.InsertCharacters(1)
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		cellWith(screen, "s", withFg("red")),
 		cellWith(screen, "a", withFg("red")),
@@ -909,7 +909,7 @@ func TestPyteTestScreenDeleteCharacters(t *testing.T) {
 		t.Fatalf("expected cursor origin")
 	}
 	assertDisplay(t, screen, []string{"m  ", "is ", "foo"})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "m", withFg("red")),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -938,7 +938,7 @@ func TestPyteTestScreenDeleteCharacters(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"15   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "1", withFg("red")),
 		cellWith(screen, "5", withFg("red")),
 		screen.defaultCell(),
@@ -953,7 +953,7 @@ func TestPyteTestScreenDeleteCharacters(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"12   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "1", withFg("red")),
 		cellWith(screen, "2", withFg("red")),
 		screen.defaultCell(),
@@ -967,7 +967,7 @@ func TestPyteTestScreenDeleteCharacters(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"5    "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "5", withFg("red")),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -985,7 +985,7 @@ func TestPyteTestScreenEraseCharacter(t *testing.T) {
 		t.Fatalf("expected cursor origin")
 	}
 	assertDisplay(t, screen, []string{"  m", "is ", "foo"})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		screen.defaultCell(),
 		cellWith(screen, "m", withFg("red")),
@@ -1014,7 +1014,7 @@ func TestPyteTestScreenEraseCharacter(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"1   5"})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "1", withFg("red")),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -1029,7 +1029,7 @@ func TestPyteTestScreenEraseCharacter(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"12   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "1", withFg("red")),
 		cellWith(screen, "2", withFg("red")),
 		screen.defaultCell(),
@@ -1043,7 +1043,7 @@ func TestPyteTestScreenEraseCharacter(t *testing.T) {
 		t.Fatalf("expected cursor unchanged")
 	}
 	assertDisplay(t, screen, []string{"    5"})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -1062,7 +1062,7 @@ func TestPyteTestScreenEraseInLine(t *testing.T) {
 		t.Fatalf("expected cursor at (0,2)")
 	}
 	assertDisplay(t, screen, []string{"sa   ", "s foo", "but a", "re yo", "u?   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		cellWith(screen, "s", withFg("red")),
 		cellWith(screen, "a", withFg("red")),
 		screen.defaultCell(),
@@ -1076,7 +1076,7 @@ func TestPyteTestScreenEraseInLine(t *testing.T) {
 		t.Fatalf("expected cursor at (0,2)")
 	}
 	assertDisplay(t, screen, []string{"    i", "s foo", "but a", "re yo", "u?   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(),
 		screen.defaultCell(),
 		screen.defaultCell(),
@@ -1090,7 +1090,7 @@ func TestPyteTestScreenEraseInLine(t *testing.T) {
 		t.Fatalf("expected cursor at (0,2)")
 	}
 	assertDisplay(t, screen, []string{"     ", "s foo", "but a", "re yo", "u?   "})
-	assertCellsEqual(t, [][]Cell{screen.Buffer[0]}, [][]Cell{{
+	assertCellsEqual(t, [][]Cell{screen.Rows()[0]}, [][]Cell{{
 		screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(),
 	}})
 }
@@ -1105,7 +1105,7 @@ func TestPyteTestScreenEraseInDisplay(t *testing.T) {
 		t.Fatalf("expected cursor at (2,2)")
 	}
 	assertDisplay(t, screen, []string{"sam i", "s foo", "bu   ", "     ", "     "})
-	assertCellsEqual(t, screen.Buffer[2:], [][]Cell{
+	assertCellsEqual(t, screen.Rows()[2:], [][]Cell{
 		{cellWith(screen, "b", withFg("red")), cellWith(screen, "u", withFg("red")), screen.defaultCell(), screen.defaultCell(), screen.defaultCell()},
 		{screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell()},
 		{screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell()},
@@ -1117,7 +1117,7 @@ func TestPyteTestScreenEraseInDisplay(t *testing.T) {
 		t.Fatalf("expected cursor at (2,2)")
 	}
 	assertDisplay(t, screen, []string{"     ", "     ", "    a", "re yo", "u?   "})
-	assertCellsEqual(t, screen.Buffer[:3], [][]Cell{
+	assertCellsEqual(t, screen.Rows()[:3], [][]Cell{
 		{screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell()},
 		{screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), screen.defaultCell()},
 		{screen.defaultCell(), screen.defaultCell(), screen.defaultCell(), cellWith(screen, " ", withFg("red")), cellWith(screen, "a", withFg("red"))},

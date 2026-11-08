@@ -88,9 +88,9 @@ func screenDiff(want, got *ScrollbackScreen) string {
 	if want.lastDrawn != got.lastDrawn {
 		return fmt.Sprintf("lastDrawn %q, want %q", got.lastDrawn, want.lastDrawn)
 	}
-	for y := range want.Buffer {
-		if !slices.Equal(want.Buffer[y], got.Buffer[y]) {
-			return fmt.Sprintf("row %d:\n  got  %v\n  want %v", y, got.Buffer[y], want.Buffer[y])
+	for y := range want.Rows() {
+		if !slices.Equal(want.Rows()[y], got.Rows()[y]) {
+			return fmt.Sprintf("row %d:\n  got  %v\n  want %v", y, got.Rows()[y], want.Rows()[y])
 		}
 	}
 	wh, gh := want.ScrollbackRows(), got.ScrollbackRows()

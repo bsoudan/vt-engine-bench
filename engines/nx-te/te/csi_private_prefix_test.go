@@ -34,7 +34,7 @@ func TestCSIGreaterThanPrefixNotSGR(t *testing.T) {
 
 	// And the cell at (1,1) (where 'X' was drawn) must not have
 	// underline either.
-	cell := screen.Buffer[0][0]
+	cell := screen.Rows()[0][0]
 	if cell.Data != "X" {
 		t.Fatalf("expected 'X' at (0,0), got %q", cell.Data)
 	}
@@ -66,13 +66,13 @@ func TestCSIEqualsPrefixDoesNotLeakAsText(t *testing.T) {
 
 	// The marker must be at column 0, with no preceding text from the
 	// kitty keyboard sequences.
-	cell := screen.Buffer[0][0]
+	cell := screen.Rows()[0][0]
 	if cell.Data != "X" {
 		t.Errorf("expected 'X' at (0,0), got %q (kitty keyboard params leaked as text)", cell.Data)
 	}
 	// Verify no parameter bytes leaked into the surrounding cells.
 	for col := 1; col < 5; col++ {
-		c := screen.Buffer[0][col]
+		c := screen.Rows()[0][col]
 		if c.Data != " " && c.Data != "" {
 			t.Errorf("col %d: expected blank, got %q (kitty keyboard params leaked)", col, c.Data)
 		}
@@ -97,7 +97,7 @@ func TestCSIGreaterThanPrefixDoesNotPersistUnderline(t *testing.T) {
 	esctestWrite(t, stream, "\xe2\x80\xa2") // U+2022 BULLET
 	esctestWrite(t, stream, "\x1b[m")
 
-	cell := screen.Buffer[0][0]
+	cell := screen.Rows()[0][0]
 	if cell.Data != "\xe2\x80\xa2" {
 		t.Fatalf("expected bullet at (0,0), got %q", cell.Data)
 	}

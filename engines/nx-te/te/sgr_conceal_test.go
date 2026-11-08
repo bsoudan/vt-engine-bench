@@ -16,7 +16,7 @@ func TestSGRConceal(t *testing.T) {
 	}
 
 	s.Draw("x")
-	if !s.Buffer[0][0].Attr.Conceal {
+	if !s.Rows()[0][0].Attr.Conceal {
 		t.Fatal("a cell drawn while concealed should carry the conceal attribute")
 	}
 

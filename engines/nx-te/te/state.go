@@ -77,9 +77,9 @@ func (s *Screen) MarshalState() *ScreenState {
 	return &ScreenState{
 		Columns: s.Columns,
 		Lines:   s.Lines,
-		Buffer:  trimBuffer(s.Buffer),
+		Buffer:  trimBuffer(s.unpackRows(s.rows)),
 
-		AltBuffer:      trimBuffer(s.altBuffer),
+		AltBuffer:      trimBuffer(s.unpackRows(s.altRows)),
 		AltActive:      s.altActive,
 		AltSavepoints:  copySavepoints(s.altSavepoints),
 		AltWrapNext:    s.altWrapNext,
@@ -140,9 +140,8 @@ func (s *Screen) MarshalState() *ScreenState {
 func (s *Screen) UnmarshalState(st *ScreenState) {
 	s.Columns = st.Columns
 	s.Lines = st.Lines
-	s.Buffer = deepCopyBuffer(st.Buffer)
-
-	s.altBuffer = deepCopyBuffer(st.AltBuffer)
+	rows := deepCopyBuffer(st.Buffer) // packed below, once the modes that fix the default cell are restored
+	altRows := deepCopyBuffer(st.AltBuffer)
 	s.altActive = st.AltActive
 	s.altSavepoints = copySavepoints(st.AltSavepoints)
 	s.altWrapNext = st.AltWrapNext
@@ -199,8 +198,10 @@ func (s *Screen) UnmarshalState(st *ScreenState) {
 	// Re-pad rows that trimBuffer shortened on the way out back to full width
 	// with the default cell (which depends on DECSCNM, restored above).
 	blank := s.defaultCell()
-	padRowsToColumns(s.Buffer, s.Columns, blank)
-	padRowsToColumns(s.altBuffer, s.Columns, blank)
+	padRowsToColumns(rows, s.Columns, blank)
+	padRowsToColumns(altRows, s.Columns, blank)
+	s.rows = s.packRows(rows)
+	s.altRows = s.packRows(altRows)
 }
 
 // --- copy helpers ---

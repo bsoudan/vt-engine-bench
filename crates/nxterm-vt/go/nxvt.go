@@ -126,12 +126,13 @@ func color(c cell.Color, bold bool) C.nxvt_color {
 //export nxvt_snapshot
 func nxvt_snapshot(h C.uintptr_t, fg, bg *C.nxvt_color) *C.char {
 	s := get(h).screen.Screen
-	rows := make([]string, len(s.Buffer))
-	for i, row := range s.Buffer {
+	cells := s.Rows()
+	rows := make([]string, len(cells))
+	for i, row := range cells {
 		rows[i] = rowText(s, row)
 	}
-	if len(s.Buffer) > 0 && len(s.Buffer[0]) > 0 {
-		a := s.Buffer[0][0].Attr
+	if len(cells) > 0 && len(cells[0]) > 0 {
+		a := cells[0][0].Attr
 		*fg, *bg = color(a.Fg, a.Bold), color(a.Bg, a.Bold)
 	}
 	return C.CString(strings.Join(rows, "\n"))

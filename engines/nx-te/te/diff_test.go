@@ -11,12 +11,12 @@ import (
 func TestDiffIndexReverseIndex(t *testing.T) {
 	t.Parallel()
 	screen := NewScreen(80, 24)
-	for row := range screen.Buffer {
-		screen.Buffer[row][0].Data = string(rune('a' + row))
+	for row := range screen.rows {
+		screen.rows[row][0] = screen.pack(Cell{Data: string(rune('a' + row))})
 	}
 	rows := func() [][]Cell {
-		out := make([][]Cell, len(screen.Buffer))
-		for i, r := range screen.Buffer {
+		out := make([][]Cell, len(screen.Rows()))
+		for i, r := range screen.Rows() {
 			out[i] = slices.Clone(r)
 		}
 		return out

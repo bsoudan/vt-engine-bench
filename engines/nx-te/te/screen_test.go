@@ -26,12 +26,12 @@ func TestResizeWhileAltScreenActive(t *testing.T) {
 	screen.Resize(5, 6)
 
 	screen.ResetMode([]int{ModeAltBufCursor}, false)
-	if len(screen.Buffer) != screen.Lines {
-		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Buffer), screen.Lines)
+	if len(screen.Rows()) != screen.Lines {
+		t.Fatalf("primary buffer rows = %d, want %d", len(screen.Rows()), screen.Lines)
 	}
-	for row := range screen.Buffer {
-		if len(screen.Buffer[row]) != screen.Columns {
-			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Buffer[row]), screen.Columns)
+	for row := range screen.Rows() {
+		if len(screen.Rows()[row]) != screen.Columns {
+			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Rows()[row]), screen.Columns)
 		}
 	}
 	screen.Display()
@@ -47,12 +47,12 @@ func TestResizeWithInactiveAltBuffer(t *testing.T) {
 	screen.Resize(5, 6)
 
 	screen.SetMode([]int{ModeAltBuf}, false)
-	if len(screen.Buffer) != screen.Lines {
-		t.Fatalf("alt buffer rows = %d, want %d", len(screen.Buffer), screen.Lines)
+	if len(screen.Rows()) != screen.Lines {
+		t.Fatalf("alt buffer rows = %d, want %d", len(screen.Rows()), screen.Lines)
 	}
-	for row := range screen.Buffer {
-		if len(screen.Buffer[row]) != screen.Columns {
-			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Buffer[row]), screen.Columns)
+	for row := range screen.Rows() {
+		if len(screen.Rows()[row]) != screen.Columns {
+			t.Fatalf("row %d cols = %d, want %d", row, len(screen.Rows()[row]), screen.Columns)
 		}
 	}
 	screen.Display()

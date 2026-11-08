@@ -25,16 +25,16 @@ func (h *ScrollbackScreen) Apply(d cell.Delta) error {
 	if d.Whole && (d.Cols != h.Columns || d.Rows != h.Lines) && d.Cols > 0 && d.Rows > 0 {
 		h.Screen.Resize(d.Rows, d.Cols)
 	}
-	buf, err := d.Apply(h.Buffer, func(row []Cell, unseen bool) {
+	buf, err := d.Apply(h.Rows(), func(row []Cell, unseen bool) {
 		if unseen {
 			h.markUnseen(h.scrollback.TotalAdded)
 		}
-		h.keepScrolledOff(row)
+		h.keepScrolledOff(h.packRow(row))
 	})
 	if err != nil {
 		return err
 	}
-	h.Buffer = buf
+	h.rows = h.packRows(buf)
 	return nil
 }
 
@@ -113,8 +113,8 @@ func (h *ScrollbackScreen) Fill(from, to, first uint64, rows [][]Cell) (lo, hi u
 		if seq < from || seq >= to || seq < held || seq >= h.scrollback.TotalAdded || !h.Unseen(seq) {
 			continue
 		}
-		r := [][]Cell{append([]Cell(nil), row...)}
-		fitRowsWidth(r, h.Columns, h.defaultCell())
+		r := [][]gcell{h.packRow(row)}
+		fitRowsWidth(r, h.Columns, h.blankCell())
 		h.scrollback.Top.items[seq-held] = r[0]
 		if lo == hi {
 			lo = seq
@@ -158,14 +158,14 @@ func (h *ScrollbackScreen) Renumber(first, total uint64, keep bool) {
 	held := func(seq uint64) bool {
 		return keep && seq >= oldFirst && seq-oldFirst < uint64(len(old)) && !h.Unseen(seq)
 	}
-	rows := make([][]Cell, 0, total-first)
+	rows := make([][]gcell, 0, total-first)
 	var unseen []seqs
 	for seq := first; seq < total; seq++ {
 		if held(seq) {
 			rows = append(rows, old[seq-oldFirst])
 			continue
 		}
-		rows = append(rows, blankLine(h.Columns, h.defaultCell()))
+		rows = append(rows, blankLine(h.Columns, h.blankCell()))
 		if n := len(unseen); n > 0 && unseen[n-1].to == seq {
 			unseen[n-1].to++
 		} else {
@@ -218,9 +218,9 @@ func (h *ScrollbackScreen) SetAltScreen(on bool) {
 		return
 	}
 	h.altActive = on
-	h.altBuffer, h.altSavepoints, h.altWrapNext, h.altSavedCursor = nil, nil, false, nil
+	h.altRows, h.altSavepoints, h.altWrapNext, h.altSavedCursor = nil, nil, false, nil
 	if on {
-		h.altBuffer = makeBlankCells(h.Lines, h.Columns)
+		h.altRows = makeBlankCells(h.Lines, h.Columns)
 	}
 }
 

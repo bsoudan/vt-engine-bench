@@ -37,13 +37,17 @@ type Savepoint struct {
 //
 // Screen is not safe for concurrent use. It carries no internal locking: a
 // single owner must serialize all access, including read-only accessors like
-// Display and LinesCells (which read Buffer/Cursor directly). Here the vtapp
+// Display and Rows (which read rows/Cursor directly). Here the vtapp
 // owns the authoritative ScrollbackScreen and the view owns its shadow; each is
 // one goroutine, so no lock is needed.
+//
+// The cells are stored as gcells (gcell.go), eight bytes each, indexing the
+// screen's tables of attributes and clusters; Rows hands them out as
+// cell.Cells.
 type Screen struct {
 	Columns            int
 	Lines              int
-	Buffer             [][]Cell
+	rows               [][]gcell
 	Cursor             Cursor
 	Mode               map[int]struct{}
 	Margins            *Margins
@@ -99,7 +103,7 @@ type Screen struct {
 	// buffer pushes off the top, before it goes: a ScrollbackScreen keeps it.
 	// Index calls it, however it was reached — a line feed, or a line
 	// wrapping on the bottom row inside Draw — so no row leaves unkept.
-	scrolledOff         func(row []Cell) []Cell
+	scrolledOff         func(row []gcell) []gcell
 	leftMargin          int
 	rightMargin         int
 	wrapNext            bool
@@ -126,11 +130,17 @@ type Screen struct {
 	windowIconified     bool
 	indexedColors       int
 
-	altBuffer      [][]Cell
+	altRows        [][]gcell
 	altSavepoints  []Savepoint
 	altWrapNext    bool
 	altActive      bool
 	altSavedCursor *Cursor
+
+	// tables is what the cells index into (gcell.go); moreRows, if set, is
+	// the rows beyond the screen's own that index into them too, a
+	// ScrollbackScreen's history, for compactTables.
+	tables   cellTables
+	moreRows func() [][]gcell
 
 	// hot is the state of the modes the hot paths read — for each cell
 	// drawn, each row scrolled, each blank cell made — as booleans, kept
@@ -172,9 +182,9 @@ func (s *Screen) Reset() {
 		s.Resize(s.Lines, *s.SavedColumns)
 		s.SavedColumns = nil
 	}
-	s.Buffer = makeBlankCells(s.Lines, s.Columns)
+	s.rows = makeBlankCells(s.Lines, s.Columns)
 	s.Margins = nil
-	s.altBuffer = nil
+	s.altRows = nil
 	s.altSavepoints = nil
 	s.altWrapNext = false
 	s.altActive = false
@@ -242,13 +252,13 @@ func (s *Screen) Resize(lines, columns int) {
 	if columns <= 0 {
 		columns = 1
 	}
-	if s.Lines == lines && s.Columns == columns && s.Buffer != nil {
+	if s.Lines == lines && s.Columns == columns && s.rows != nil {
 		return
 	}
-	if s.Buffer == nil {
+	if s.rows == nil {
 		s.Lines = lines
 		s.Columns = columns
-		s.Buffer = makeBlankCells(lines, columns)
+		s.rows = makeBlankCells(lines, columns)
 		if s.charPixelWidth == 0 {
 			s.charPixelWidth = 8
 		}
@@ -270,14 +280,14 @@ func (s *Screen) Resize(lines, columns int) {
 		// DeleteLines shifts the surviving rows to the top of the buffer but
 		// leaves its length unchanged; truncate so len(Buffer) == Lines holds
 		// (LinesCells and snapshot callers rely on this invariant).
-		s.Buffer = s.Buffer[:lines]
+		s.rows = s.rows[:lines]
 	}
 
-	fitRowsWidth(s.Buffer, columns, s.defaultCell())
+	fitRowsWidth(s.rows, columns, s.blankCell())
 
 	if lines > s.Lines {
 		for i := 0; i < lines-s.Lines; i++ {
-			s.Buffer = append(s.Buffer, blankLine(columns, s.defaultCell()))
+			s.rows = append(s.rows, blankLine(columns, s.blankCell()))
 		}
 	}
 
@@ -311,8 +321,8 @@ func (s *Screen) Resize(lines, columns int) {
 	// those belong to Reset(), not Resize() (this body had been copy-pasted).
 	s.wrapNext = false
 
-	if s.altBuffer != nil {
-		s.altBuffer = makeBlankCells(lines, columns)
+	if s.altRows != nil {
+		s.altRows = makeBlankCells(lines, columns)
 		s.altSavepoints = nil
 		s.altWrapNext = false
 	}
@@ -325,18 +335,17 @@ func (s *Screen) Display() []string {
 		var b strings.Builder
 		col := 0
 		for col < s.Columns {
-			cell := s.Buffer[row][col]
-			if cell.Data == "" {
+			g := s.rows[row][col]
+			if g.text == 0 {
 				col++
 				continue
 			}
-			width := s.Widths.Width(cell.Data)
+			width := s.widthOf(g)
+			b.WriteString(s.text(g))
 			if width == 0 {
-				b.WriteString(cell.Data)
 				col++
 				continue
 			}
-			b.WriteString(cell.Data)
 			if width > 1 {
 				col += width
 			} else {
@@ -348,22 +357,16 @@ func (s *Screen) Display() []string {
 	return lines
 }
 
-// LinesCells returns a copy of the screen cell buffer.
-func (s *Screen) LinesCells() [][]Cell {
-	lines := make([][]Cell, s.Lines)
-	for row := range s.Buffer {
-		lines[row] = append([]Cell(nil), s.Buffer[row]...)
-	}
-	return lines
-}
+// LinesCells returns a copy of the screen cell buffer: Rows.
+func (s *Screen) LinesCells() [][]Cell { return s.Rows() }
 
 // markWrapped records that the line on row wraps into the next: autowrap is
 // taking the cursor on from the right edge, limit. Only a wrap at the
 // screen's own edge is one — within left and right margins (DECLRMM) the
 // row goes on past the margin, and what wrapped is a column, not the line.
 func (s *Screen) markWrapped(row, limit int) {
-	if limit == s.Columns-1 && row >= 0 && row < len(s.Buffer) && limit >= 0 {
-		s.Buffer[row][limit].Wrapped = true
+	if limit == s.Columns-1 && row >= 0 && row < len(s.rows) && limit >= 0 {
+		s.rows[row][limit].flags |= flagWrapped
 	}
 }
 
@@ -371,17 +374,31 @@ func (s *Screen) markWrapped(row, limit int) {
 // overwriting cell col would orphan: writing over a wide head leaves a stray
 // empty continuation (shifts the line left on render), and writing over a
 // continuation leaves a half-rendered head (hides the new char). xterm blanks
-// the orphan to a space. Continuation cells are uniquely Data == "".
-func (s *Screen) clearWidePairAt(line []Cell, col int) {
+// the orphan to a space. Continuation cells are uniquely without text.
+func (s *Screen) clearWidePairAt(line []gcell, col int) {
 	if col < 0 || col >= len(line) {
 		return
 	}
-	if s.Widths.Width(line[col].Data) == 2 && col+1 < len(line) {
-		line[col+1] = Cell{Data: " ", Attr: line[col+1].Attr}
+	if s.widthOf(line[col]) == 2 && col+1 < len(line) {
+		line[col+1] = gcell{text: ' ', style: line[col+1].style}
 	}
-	if line[col].Data == "" && col > 0 && s.Widths.Width(line[col-1].Data) == 2 {
-		line[col-1] = Cell{Data: " ", Attr: line[col-1].Attr}
+	if line[col].text == 0 && col > 0 && s.widthOf(line[col-1]) == 2 {
+		line[col-1] = gcell{text: ' ', style: line[col-1].style}
 	}
+}
+
+// protected says whether g is guarded against an erase: DECSCA's
+// protection for a private erase, ISO 6429's for the other. A cell in the
+// default attributes, most of a screen, is not, without a lookup.
+func (s *Screen) protected(g gcell, private bool) bool {
+	if g.style == 0 {
+		return false
+	}
+	a := &s.tables.styles[g.style]
+	if private {
+		return a.Protected
+	}
+	return a.ISOProtected
 }
 
 // Draw renders text at the current cursor position.
@@ -464,6 +481,7 @@ func (s *Screen) asciiDrawable() bool {
 // it does not draw, with the rest of data undrawn.
 func (s *Screen) drawGeneral(data string) bool {
 	data = s.translate(data)
+	sid := s.styleID(s.Cursor.Attr) // the style every cell drawn here wears
 	// Grapheme clusters only: uniseg's Graphemes iterator would also work out
 	// word, sentence and line breaks for every step, which nothing here reads.
 	state := -1
@@ -497,8 +515,7 @@ func (s *Screen) drawGeneral(data string) bool {
 			// the pyte conformance suite encodes for the line-end case).
 			if width == 2 && s.Cursor.Col == limit && s.Cursor.Col > 0 &&
 				s.Cursor.Row < s.Lines-1 && s.isModeSet(ModeDECAWM) {
-				s.Buffer[s.Cursor.Row][s.Cursor.Col] = s.defaultCell()
-				s.Buffer[s.Cursor.Row][s.Cursor.Col].Empty = true // the glyph goes on the next row whole
+				s.rows[s.Cursor.Row][s.Cursor.Col] = s.blankCell().setEmpty(true) // the glyph goes on the next row whole
 				s.markWrapped(s.Cursor.Row, limit)
 				s.CarriageReturn()
 				s.LineFeed()
@@ -508,28 +525,29 @@ func (s *Screen) drawGeneral(data string) bool {
 				s.InsertCharacters(width)
 			}
 
-			line := s.Buffer[s.Cursor.Row]
+			line := s.rows[s.Cursor.Row]
 			switch {
 			case width == 1:
 				s.clearWidePairAt(line, s.Cursor.Col)
-				line[s.Cursor.Col] = Cell{Data: cluster, Attr: s.Cursor.Attr}
+				line[s.Cursor.Col] = s.cellOf(cluster, sid)
 			case width == 2:
 				s.clearWidePairAt(line, s.Cursor.Col)
 				if s.Cursor.Col+1 < s.Columns {
 					s.clearWidePairAt(line, s.Cursor.Col+1)
 				}
-				line[s.Cursor.Col] = Cell{Data: cluster, Attr: s.Cursor.Attr}
+				line[s.Cursor.Col] = s.cellOf(cluster, sid)
 				if s.Cursor.Col+1 < s.Columns {
-					line[s.Cursor.Col+1] = Cell{Data: "", Attr: s.Cursor.Attr}
+					line[s.Cursor.Col+1] = gcell{style: sid}
 				}
 			case width == 0 && isCombiningCluster(cluster):
+				// The mark joins the cell before, which keeps its style and wrap.
 				if s.Cursor.Col > 0 {
 					prev := line[s.Cursor.Col-1]
-					line[s.Cursor.Col-1] = Cell{Data: norm.NFC.String(prev.Data + cluster), Attr: prev.Attr, Wrapped: prev.Wrapped}
+					line[s.Cursor.Col-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
 				} else if s.Cursor.Row > 0 {
-					prevLine := s.Buffer[s.Cursor.Row-1]
+					prevLine := s.rows[s.Cursor.Row-1]
 					prev := prevLine[s.Columns-1]
-					prevLine[s.Columns-1] = Cell{Data: norm.NFC.String(prev.Data + cluster), Attr: prev.Attr, Wrapped: prev.Wrapped}
+					prevLine[s.Columns-1] = s.cellOf(norm.NFC.String(s.text(prev)+cluster), prev.style).setWrapped(prev.wrapped())
 				}
 			default:
 				return false
@@ -585,25 +603,25 @@ func (s *Screen) drawASCII(data string) {
 		limit = s.rightMargin
 	}
 	autowrap := s.isModeSet(ModeDECAWM)
-	line := s.Buffer[s.Cursor.Row]
+	sid := s.styleID(s.Cursor.Attr)
+	line := s.rows[s.Cursor.Row]
 	for i := 0; i < len(data); i++ {
 		if s.wrapNext {
 			s.wrapNext = false
 			s.markWrapped(s.Cursor.Row, limit)
 			s.CarriageReturn()
 			s.LineFeed()
-			line = s.Buffer[s.Cursor.Row]
+			line = s.rows[s.Cursor.Row]
 		}
 		if s.Cursor.Col > limit {
 			s.Cursor.Col = limit
 		}
 		col := s.Cursor.Col
-		if d := line[col].Data; len(d) != 1 || d[0] >= 0x80 {
+		if g := line[col]; g.text == 0 || g.text >= 0x80 || g.flags&flagGrapheme != 0 {
 			s.clearWidePairAt(line, col) // the cell may be half of a wide glyph
 		}
-		cluster := asciiCell[data[i]]
-		line[col] = Cell{Data: cluster, Attr: s.Cursor.Attr}
-		s.lastDrawn = cluster
+		line[col] = gcell{text: uint32(data[i]), style: sid}
+		s.lastDrawn = asciiCell[data[i]]
 		if next := col + 1; next > limit {
 			if autowrap {
 				s.wrapNext = true
@@ -657,14 +675,14 @@ func (s *Screen) Index() {
 		if left == 0 && right == s.Columns-1 {
 			kept := s.scrolledOff != nil && top == 0 && bottom == s.Lines-1 && !s.IsAltScreenActive()
 			s.scrolled(top, bottom, 1, kept)
-			spare := s.Buffer[top]
+			spare := s.rows[top]
 			if kept {
 				spare = s.scrolledOff(spare) // the row is the history's; its evicted one is ours
 			}
 			for row := top; row < bottom; row++ {
-				s.Buffer[row] = s.Buffer[row+1]
+				s.rows[row] = s.rows[row+1]
 			}
-			s.Buffer[bottom] = refillLine(spare, s.Columns, s.defaultCell())
+			s.rows[bottom] = refillLine(spare, s.Columns, s.blankCell())
 		} else {
 			// DECLRMM: scroll only the columns inside the margins, like
 			// ScrollUp, so content outside [left,right] is left in place.
@@ -696,9 +714,9 @@ func (s *Screen) ReverseIndex() {
 		if left == 0 && right == s.Columns-1 {
 			s.scrolled(top, bottom, -1, false)
 			for row := bottom; row > top; row-- {
-				s.Buffer[row] = s.Buffer[row-1]
+				s.rows[row] = s.rows[row-1]
 			}
-			s.Buffer[top] = blankLine(s.Columns, s.defaultCell())
+			s.rows[top] = blankLine(s.Columns, s.blankCell())
 		} else {
 			for row := bottom; row > top; row-- {
 				s.copyRowSegment(row-1, row, left, right)
@@ -935,19 +953,19 @@ func (s *Screen) InsertCharacters(params ...int) {
 	if count <= 0 {
 		return
 	}
-	line := s.Buffer[s.Cursor.Row]
+	line := s.rows[s.Cursor.Row]
 	// What is pushed past the edge is lost, as on a VT: it does not flow on
 	// to the next row. But a line that wrapped still goes on there, so the
 	// cell that is last now carries the wrap.
-	wrapped := right == s.Columns-1 && line[right].Wrapped
+	wrapped := right == s.Columns-1 && line[right].wrapped()
 	for col := right; col >= s.Cursor.Col+count; col-- {
 		line[col] = line[col-count]
 	}
 	for col := s.Cursor.Col; col < s.Cursor.Col+count && col <= right; col++ {
-		line[col] = s.defaultCell()
+		line[col] = s.blankCell()
 	}
 	if wrapped {
-		line[right].Wrapped = true
+		line[right] = line[right].setWrapped(true)
 	}
 }
 
@@ -977,20 +995,18 @@ func (s *Screen) DeleteCharacters(params ...int) {
 	if count <= 0 {
 		return
 	}
-	line := s.Buffer[s.Cursor.Row]
+	line := s.rows[s.Cursor.Row]
 	// A line that wrapped still goes on at the next row: what the deletion
 	// opens at the end is Empty, not text, and the wrap stays on the last
 	// cell.
-	wrapped := right == s.Columns-1 && line[right].Wrapped
+	wrapped := right == s.Columns-1 && line[right].wrapped()
 	for col := s.Cursor.Col; col <= right-count; col++ {
-		line[col] = line[col+count]
-		line[col].Wrapped = false
+		line[col] = line[col+count].setWrapped(false)
 	}
 	for col := right - count + 1; col <= right; col++ {
-		line[col] = s.defaultCell()
-		line[col].Empty = wrapped
+		line[col] = s.blankCell().setEmpty(wrapped)
 	}
-	line[right].Wrapped = wrapped
+	line[right] = line[right].setWrapped(wrapped)
 }
 
 // EraseCharacters erases characters at the cursor.
@@ -1007,19 +1023,20 @@ func (s *Screen) EraseCharacters(params ...int) {
 	if s.Cursor.Col < left || s.Cursor.Col > right {
 		return
 	}
-	line := s.Buffer[s.Cursor.Row]
+	line := s.rows[s.Cursor.Row]
 	end := min(s.Cursor.Col+count-1, right)
+	blank := s.blankOf(s.bceAttr())
 	for col := s.Cursor.Col; col <= end; col++ {
-		if line[col].Attr.ISOProtected {
+		if s.protected(line[col], false) {
 			continue
 		}
-		line[col] = Cell{Data: " ", Attr: s.bceAttr()}
+		line[col] = blank
 	}
 }
 
 // EraseInLine erases portions of the current line.
 func (s *Screen) EraseInLine(how int, private bool, _ ...int) {
-	line := s.Buffer[s.Cursor.Row]
+	line := s.rows[s.Cursor.Row]
 	left := 0
 	right := s.Columns - 1
 	var start, end int
@@ -1034,13 +1051,9 @@ func (s *Screen) EraseInLine(how int, private bool, _ ...int) {
 		start = left
 		end = right + 1
 	}
-	blank := Cell{Data: " ", Attr: s.bceAttr()}
+	blank := s.blankOf(s.bceAttr())
 	for col := start; col < end; col++ {
-		protected := line[col].Attr.ISOProtected
-		if private {
-			protected = line[col].Attr.Protected
-		}
-		if protected {
+		if s.protected(line[col], private) {
 			continue
 		}
 		line[col] = blank
@@ -1079,15 +1092,11 @@ func (s *Screen) eraseInDisplay(how int, private bool, selective bool) {
 	if how == 0 || how == 1 {
 		s.EraseInLine(how, private)
 	}
-	blank := Cell{Data: " ", Attr: s.bceAttr()}
+	blank := s.blankOf(s.bceAttr())
 	for row := start; row < end; row++ {
-		line := s.Buffer[row]
+		line := s.rows[row]
 		for col := 0; col < s.Columns; col++ {
-			protected := line[col].Attr.ISOProtected
-			if private {
-				protected = line[col].Attr.Protected
-			}
-			if protected {
+			if s.protected(line[col], private) {
 				continue
 			}
 			line[col] = blank
@@ -1331,7 +1340,7 @@ func (s *Screen) reverseWrapToPreviousLine(left, right int, reverseInline, rever
 		return
 	}
 	if reverseInline && !reverseExtend {
-		if row := s.Buffer[targetRow]; len(row) == 0 || !row[len(row)-1].Wrapped {
+		if row := s.rows[targetRow]; len(row) == 0 || !row[len(row)-1].wrapped() {
 			return
 		}
 	}
@@ -1525,9 +1534,7 @@ func (s *Screen) Bell() {
 func (s *Screen) AlignmentDisplay() {
 	for row := 0; row < s.Lines; row++ {
 		for col := 0; col < s.Columns; col++ {
-			cell := s.Buffer[row][col]
-			cell.Data = "E"
-			s.Buffer[row][col] = cell
+			s.rows[row][col] = s.retext(s.rows[row][col], "E")
 		}
 	}
 	s.Margins = nil
@@ -2087,10 +2094,10 @@ func (s *Screen) InsertColumns(count int) {
 	}
 	for row := top; row <= bottom; row++ {
 		for col := right; col >= s.Cursor.Col+count; col-- {
-			s.Buffer[row][col] = s.Buffer[row][col-count]
+			s.rows[row][col] = s.rows[row][col-count]
 		}
 		for col := s.Cursor.Col; col < s.Cursor.Col+count && col <= right; col++ {
-			s.Buffer[row][col] = s.defaultCell()
+			s.rows[row][col] = s.blankCell()
 		}
 	}
 }
@@ -2116,10 +2123,10 @@ func (s *Screen) DeleteColumns(count int) {
 	}
 	for row := top; row <= bottom; row++ {
 		for col := s.Cursor.Col; col <= right-count; col++ {
-			s.Buffer[row][col] = s.Buffer[row][col+count]
+			s.rows[row][col] = s.rows[row][col+count]
 		}
 		for col := right - count + 1; col <= right; col++ {
-			s.Buffer[row][col] = s.defaultCell()
+			s.rows[row][col] = s.blankCell()
 		}
 	}
 }
@@ -2168,11 +2175,10 @@ func (s *Screen) SelectiveEraseRectangle(top, left, bottom, right int) {
 	}
 	for row := top - 1; row <= bottom-1; row++ {
 		for col := left - 1; col <= right-1; col++ {
-			cell := s.Buffer[row][col]
-			if cell.Attr.Protected {
+			if s.protected(s.rows[row][col], true) {
 				continue
 			}
-			s.Buffer[row][col] = Cell{Data: " ", Attr: s.defaultAttr()}
+			s.rows[row][col] = s.blankCell()
 		}
 	}
 }
@@ -2193,15 +2199,15 @@ func (s *Screen) enterAltScreen(clear bool, saveCursor bool, moveCursor bool) {
 		cursor := s.Cursor
 		s.altSavedCursor = &cursor
 	}
-	if s.altBuffer == nil {
-		s.altBuffer = makeBlankCells(s.Lines, s.Columns)
+	if s.altRows == nil {
+		s.altRows = makeBlankCells(s.Lines, s.Columns)
 	}
-	s.Buffer, s.altBuffer = s.altBuffer, s.Buffer
+	s.rows, s.altRows = s.altRows, s.rows
 	s.Savepoints, s.altSavepoints = s.altSavepoints, s.Savepoints
 	s.wrapNext, s.altWrapNext = s.altWrapNext, s.wrapNext
 	s.altActive = true
 	if clear {
-		s.Buffer = makeBlankCells(s.Lines, s.Columns)
+		s.rows = makeBlankCells(s.Lines, s.Columns)
 		s.wrapNext = false
 	}
 	if moveCursor {
@@ -2213,12 +2219,12 @@ func (s *Screen) exitAltScreen(clear bool, restoreCursor bool) {
 	if !s.altActive {
 		return
 	}
-	s.Buffer, s.altBuffer = s.altBuffer, s.Buffer
+	s.rows, s.altRows = s.altRows, s.rows
 	s.Savepoints, s.altSavepoints = s.altSavepoints, s.Savepoints
 	s.wrapNext, s.altWrapNext = s.altWrapNext, s.wrapNext
 	s.altActive = false
 	if clear {
-		s.altBuffer = makeBlankCells(s.Lines, s.Columns)
+		s.altRows = makeBlankCells(s.Lines, s.Columns)
 		s.altWrapNext = false
 		s.altSavepoints = nil
 	}
@@ -2274,12 +2280,10 @@ func (s *Screen) fillRectangle(top, left, bottom, right int, data string) {
 	}
 	for row := top - 1; row <= bottom-1; row++ {
 		for col := left - 1; col <= right-1; col++ {
-			cell := s.Buffer[row][col]
-			if cell.Attr.Protected {
+			if s.protected(s.rows[row][col], true) {
 				continue
 			}
-			cell.Data = data
-			s.Buffer[row][col] = cell
+			s.rows[row][col] = s.retext(s.rows[row][col], data)
 		}
 	}
 }
@@ -2334,10 +2338,10 @@ func (s *Screen) CopyRectangle(srcTop, srcLeft, srcBottom, srcRight, dstTop, dst
 	if height <= 0 || width <= 0 {
 		return
 	}
-	temp := make([][]Cell, height)
+	temp := make([][]gcell, height)
 	for r := 0; r < height; r++ {
-		temp[r] = make([]Cell, width)
-		copy(temp[r], s.Buffer[srcTop-1+r][srcLeft-1:srcLeft-1+width])
+		temp[r] = make([]gcell, width)
+		copy(temp[r], s.rows[srcTop-1+r][srcLeft-1:srcLeft-1+width])
 	}
 	for r := 0; r < height; r++ {
 		dstRow := dstTop - 1 + r
@@ -2349,7 +2353,7 @@ func (s *Screen) CopyRectangle(srcTop, srcLeft, srcBottom, srcRight, dstTop, dst
 			if dstCol < 0 || dstCol >= s.Columns {
 				continue
 			}
-			s.Buffer[dstRow][dstCol] = temp[r][c]
+			s.rows[dstRow][dstCol] = temp[r][c]
 		}
 	}
 }
@@ -3013,13 +3017,7 @@ func (s *Screen) applySetMode(mode int, private bool) {
 	}
 
 	if mode == ModeDECSCNM {
-		for row := 0; row < s.Lines; row++ {
-			for col := 0; col < s.Columns; col++ {
-				cell := s.Buffer[row][col]
-				cell.Attr.Reverse = true
-				s.Buffer[row][col] = cell
-			}
-		}
+		s.setReverse(true)
 		s.SelectGraphicRendition([]int{7}, false)
 	}
 
@@ -3076,13 +3074,7 @@ func (s *Screen) applyResetMode(mode int, private bool) {
 	}
 
 	if mode == ModeDECSCNM {
-		for row := 0; row < s.Lines; row++ {
-			for col := 0; col < s.Columns; col++ {
-				cell := s.Buffer[row][col]
-				cell.Attr.Reverse = false
-				s.Buffer[row][col] = cell
-			}
-		}
+		s.setReverse(false)
 		s.SelectGraphicRendition([]int{27}, false)
 	}
 
@@ -3101,8 +3093,36 @@ func (s *Screen) defaultAttr() Attr {
 	return Attr{Reverse: reverse}
 }
 
-func (s *Screen) defaultCell() Cell {
-	return Cell{Data: " ", Attr: s.defaultAttr()}
+// blankCell is a blank in the default attributes as the screen stores
+// it; defaultCell the same as a cell.Cell.
+func (s *Screen) blankCell() gcell { return s.blankOf(s.defaultAttr()) }
+
+func (s *Screen) defaultCell() Cell { return Cell{Data: " ", Attr: s.defaultAttr()} }
+
+// retext is g with its text replaced and its style, wrap and emptiness kept.
+func (s *Screen) retext(g gcell, text string) gcell {
+	out := s.cellOf(text, g.style)
+	out.flags |= g.flags & (flagWrapped | flagEmpty)
+	return out
+}
+
+// setReverse sets or clears reverse video on every cell of the screen, as
+// DECSCNM does.
+func (s *Screen) setReverse(on bool) {
+	ids := make(map[uint16]uint16) // each style to the one with reverse as said
+	for _, row := range s.rows {
+		for col := range row {
+			g := &row[col]
+			id, ok := ids[g.style]
+			if !ok {
+				a := s.style(g.style)
+				a.Reverse = on
+				id = s.styleID(a)
+				ids[g.style] = id
+			}
+			g.style = id
+		}
+	}
 }
 
 // bceAttr is the attribute erased cells take under back-color-erase: the
@@ -3124,7 +3144,7 @@ func (s *Screen) copyRowSegment(srcRow, dstRow, left, right int) {
 		if col < 0 {
 			continue
 		}
-		s.Buffer[dstRow][col] = s.Buffer[srcRow][col]
+		s.rows[dstRow][col] = s.rows[srcRow][col]
 	}
 }
 
@@ -3136,7 +3156,7 @@ func (s *Screen) clearRowSegment(row, left, right int) {
 		if col < 0 {
 			continue
 		}
-		s.Buffer[row][col] = s.defaultCell()
+		s.rows[row][col] = s.blankCell()
 	}
 }
 
@@ -3156,14 +3176,14 @@ func (s *Screen) shiftHorizontal(left, right, top, bottom, direction int) {
 		}
 		if direction < 0 {
 			for col := left; col < right; col++ {
-				s.Buffer[row][col] = s.Buffer[row][col+1]
+				s.rows[row][col] = s.rows[row][col+1]
 			}
-			s.Buffer[row][right] = s.defaultCell()
+			s.rows[row][right] = s.blankCell()
 		} else {
 			for col := right; col > left; col-- {
-				s.Buffer[row][col] = s.Buffer[row][col-1]
+				s.rows[row][col] = s.rows[row][col-1]
 			}
-			s.Buffer[row][left] = s.defaultCell()
+			s.rows[row][left] = s.blankCell()
 		}
 	}
 }
@@ -3286,66 +3306,6 @@ func (s *Screen) translate(data string) string {
 		}
 	}
 	return b.String()
-}
-
-// refillLine is a blank line of cols cells, made in spare when spare is a
-// row of that width nothing else holds, else fresh.
-func refillLine(spare []Cell, cols int, cell Cell) []Cell {
-	if len(spare) != cols {
-		return blankLine(cols, cell)
-	}
-	for i := range spare {
-		spare[i] = cell
-	}
-	return spare
-}
-
-func blankLine(cols int, cell Cell) []Cell {
-	line := make([]Cell, cols)
-	for col := 0; col < cols; col++ {
-		line[col] = cell
-	}
-	return line
-}
-
-// fitRowsWidth truncates or pads every row in buf to exactly columns cells.
-// A wrapped row stays wrapped (cell.Cell.Wrapped): widened, what is added is
-// Empty and the wrap moves to the new last cell; narrowed, the wrap goes on
-// the cell that is last now. Widening and narrowing back gives the row as
-// it was.
-func fitRowsWidth(buf [][]Cell, columns int, blank Cell) {
-	for row := range buf {
-		line := buf[row]
-		wrapped := len(line) > 0 && line[len(line)-1].Wrapped
-		switch {
-		case len(line) > columns:
-			line = line[:columns]
-			if wrapped {
-				line[columns-1].Wrapped = true
-			}
-		case len(line) < columns:
-			missing := make([]Cell, columns-len(line))
-			for i := range missing {
-				missing[i] = blank
-				missing[i].Empty = wrapped
-			}
-			if wrapped {
-				line[len(line)-1].Wrapped = false
-				missing[len(missing)-1].Wrapped = true
-			}
-			line = append(line, missing...)
-		}
-		buf[row] = line
-	}
-}
-
-func makeBlankCells(lines, cols int) [][]Cell {
-	cells := make([][]Cell, lines)
-	cell := Cell{Data: " "}
-	for row := 0; row < lines; row++ {
-		cells[row] = blankLine(cols, cell)
-	}
-	return cells
 }
 
 func isCombiningCluster(cluster string) bool {

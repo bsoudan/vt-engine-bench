@@ -816,7 +816,7 @@ func esctestAssertScreenCharsInRectEqual(t *testing.T, screen *Screen, rect esct
 		t.Fatalf("expected %d rows, got %d", rows, len(expected))
 	}
 	for row := rect.Top; row <= rect.Bottom; row++ {
-		line := screen.Buffer[row-1]
+		line := screen.Rows()[row-1]
 		var sb strings.Builder
 		for col := rect.Left; col <= rect.Right; col++ {
 			idx := col - 1
@@ -835,7 +835,7 @@ func esctestAssertScreenCharsInRectEqual(t *testing.T, screen *Screen, rect esct
 }
 
 func esctestAssertCharHasSGR(t *testing.T, screen *Screen, point esctestPoint, missing, present []int) {
-	cell := screen.Buffer[point.Y-1][point.X-1]
+	cell := screen.Rows()[point.Y-1][point.X-1]
 	for _, attr := range missing {
 		if esctestCharHasSGR(cell, attr) {
 			t.Fatalf("expected attr %d to be unset", attr)

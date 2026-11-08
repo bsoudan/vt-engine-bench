@@ -80,7 +80,7 @@ func TestEveryScrollIsADeltasScroll(t *testing.T) {
 			if got := spannedRows(delta); !reflect.DeepEqual(got, tc.rows) {
 				t.Errorf("cells on rows %v, want %v", got, tc.rows)
 			}
-			if !reflect.DeepEqual(d.model.Held(), s.Buffer) {
+			if !reflect.DeepEqual(d.model.Held(), s.Rows()) {
 				t.Errorf("the model is not the screen after the cut")
 			}
 			_ = before
@@ -123,7 +123,7 @@ func TestABurstSaysTheRowsNoDeltaShowed(t *testing.T) {
 		}
 	}
 	d.Reset()
-	grid = cloneRows(s.Buffer)
+	grid = cloneRows(s.Rows())
 	st.FeedBytes([]byte(numbered(0, 3)))
 	apply(d.Cut())
 	st.FeedBytes([]byte(numbered(3, 20))) // 23 lines and the cursor's row: 18 scrolls
@@ -141,7 +141,7 @@ func TestABurstSaysTheRowsNoDeltaShowed(t *testing.T) {
 		t.Fatalf("the burst's delta is %d bytes: the rows unseen ride it", len(b))
 	}
 	apply(delta)
-	if !reflect.DeepEqual(grid, s.Buffer) {
+	if !reflect.DeepEqual(grid, s.Rows()) {
 		t.Fatalf("the grid is not the screen:\n%s", showRows(grid))
 	}
 	want := cloneRows(s.ScrollbackRows())
@@ -169,8 +169,8 @@ func TestAShadowSaysItsRowsUnseenAndIsFilled(t *testing.T) {
 	if err := sh.Apply(d.Cut()); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sh.Buffer, s.Buffer) || sh.TotalAdded() != s.TotalAdded() {
-		t.Fatalf("the shadow's screen\n%s, its history to %d; want\n%s, %d", showRows(sh.Buffer), sh.TotalAdded(), showRows(s.Buffer), s.TotalAdded())
+	if !reflect.DeepEqual(sh.Rows(), s.Rows()) || sh.TotalAdded() != s.TotalAdded() {
+		t.Fatalf("the shadow's screen\n%s, its history to %d; want\n%s, %d", showRows(sh.Rows()), sh.TotalAdded(), showRows(s.Rows()), s.TotalAdded())
 	}
 	lo, hi, ok := sh.UnseenIn(0, 100)
 	if !ok || lo != 3 || hi != 18 || !sh.HasUnseen() || sh.Unseen(2) || !sh.Unseen(3) {
@@ -262,7 +262,7 @@ func (v *view) resize(t *testing.T, rows, cols int, c Cursors, first, total uint
 		v.top = int(v.s.TotalAdded() - v.canvasSeq)
 		return
 	}
-	all := append(cloneRows(v.s.ScrollbackRows()), cloneRows(v.s.Buffer)...)
+	all := append(cloneRows(v.s.ScrollbackRows()), cloneRows(v.s.Rows())...)
 	var err error
 	if v.canvas, _, err = cell.Whole(all).ApplyCanvas(v.canvas, v.top); err != nil {
 		t.Fatal(err)
@@ -275,8 +275,8 @@ func (v *view) resize(t *testing.T, rows, cols int, c Cursors, first, total uint
 // blank (a height grown, its rows not yet sent).
 func (v *view) same(t *testing.T, vtapp *ScrollbackScreen, when string) {
 	t.Helper()
-	if !reflect.DeepEqual(v.s.Buffer, vtapp.Buffer) {
-		t.Fatalf("%s, the view's screen\n%swant\n%s", when, showRows(v.s.Buffer), showRows(vtapp.Buffer))
+	if !reflect.DeepEqual(v.s.Rows(), vtapp.Rows()) {
+		t.Fatalf("%s, the view's screen\n%swant\n%s", when, showRows(v.s.Rows()), showRows(vtapp.Rows()))
 	}
 	if v.s.TotalAdded() != vtapp.TotalAdded() {
 		t.Fatalf("%s, the view's history ends at %d, the vtapp's at %d", when, v.s.TotalAdded(), vtapp.TotalAdded())
@@ -287,7 +287,7 @@ func (v *view) same(t *testing.T, vtapp *ScrollbackScreen, when string) {
 	}
 	// A row the view never saw is blank in its history and on its canvas
 	// (Decided 6): the vtapp has it, to be asked for.
-	want := append(cloneRows(vtapp.ScrollbackRows()), vtapp.Buffer...)
+	want := append(cloneRows(vtapp.ScrollbackRows()), vtapp.Rows()...)
 	got := v.s.ScrollbackRows()[first-v.s.FirstSeq():]
 	for seq := first; seq < total; seq++ {
 		if v.s.Unseen(seq) {
@@ -336,8 +336,8 @@ func runDeltaSteps(t *testing.T, steps []deltaStep) {
 		v.same(t, vtapp, when)
 	}
 	d.Reset()
-	v.s.Buffer = cloneRows(vtapp.Buffer)
-	v.canvas, v.top = cloneRows(vtapp.Buffer), 0
+	v.s.setRows(cloneRows(vtapp.Rows()))
+	v.canvas, v.top = cloneRows(vtapp.Rows()), 0
 	for i, p := range steps {
 		switch {
 		case p.cut:

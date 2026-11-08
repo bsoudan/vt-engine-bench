@@ -11,7 +11,7 @@ func TestCSIColonSubparams(t *testing.T) {
 		screen := NewScreen(20, 2)
 		stream := NewStream(screen)
 		stream.Feed("\x1b[38:2:255:0:0mH")
-		cell := screen.Buffer[0][0]
+		cell := screen.Rows()[0][0]
 		if cell.Data != "H" {
 			t.Fatalf("cell (0,0) = %q, want \"H\" (colon SGR leaked as text)", cell.Data)
 		}
@@ -24,7 +24,7 @@ func TestCSIColonSubparams(t *testing.T) {
 		screen := NewScreen(20, 2)
 		stream := NewStream(screen)
 		stream.Feed("\x1b[38:5:9mX")
-		cell := screen.Buffer[0][0]
+		cell := screen.Rows()[0][0]
 		if cell.Data != "X" {
 			t.Fatalf("cell (0,0) = %q, want \"X\"", cell.Data)
 		}
@@ -37,7 +37,7 @@ func TestCSIColonSubparams(t *testing.T) {
 		screen := NewScreen(20, 2)
 		stream := NewStream(screen)
 		stream.Feed("\x1b[4:3mY")
-		cell := screen.Buffer[0][0]
+		cell := screen.Rows()[0][0]
 		if cell.Data != "Y" {
 			t.Fatalf("cell (0,0) = %q, want \"Y\"", cell.Data)
 		}

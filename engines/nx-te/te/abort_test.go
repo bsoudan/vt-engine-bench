@@ -16,7 +16,7 @@ func TestParserAbortTransitions(t *testing.T) {
 		// \e[1 is an incomplete CSI; the ESC must abort it so \e[31m applies and
 		// X is drawn (red) at (0,0). The bug rendered the literal "[31mX".
 		stream.Feed("\x1b[1\x1b[31mX")
-		if got := screen.Buffer[0][0].Data; got != "X" {
+		if got := screen.Rows()[0][0].Data; got != "X" {
 			t.Fatalf("cell (0,0) = %q, want \"X\" (CSI not aborted by ESC)", got)
 		}
 	})

@@ -4,7 +4,7 @@ import "testing"
 
 func setRowText(s *Screen, row int, text string) {
 	for c, r := range text {
-		s.Buffer[row][c] = Cell{Data: string(r), Attr: s.defaultAttr()}
+		s.rows[row][c] = s.pack(Cell{Data: string(r), Attr: s.defaultAttr()})
 	}
 }
 

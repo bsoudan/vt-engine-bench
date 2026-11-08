@@ -338,7 +338,7 @@ func TestPyteTestStreamSetTitleIconName(t *testing.T) {
 			if err := stream.Feed("➜"); err != nil {
 				t.Fatalf("feed: %v", err)
 			}
-			if screen.Buffer[0][0].Data != "➜" {
+			if screen.Rows()[0][0].Data != "➜" {
 				t.Fatalf("expected glyph")
 			}
 		}

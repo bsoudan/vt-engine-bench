@@ -18,7 +18,7 @@ func fed(t *testing.T, cols, lines int, s string) *ScrollbackScreen {
 
 // rowsOf is what a screen holds, history first.
 func rowsOf(h *ScrollbackScreen) [][]Cell {
-	return append(append([][]Cell(nil), h.ScrollbackRows()...), h.Buffer...)
+	return append(append([][]Cell(nil), h.ScrollbackRows()...), h.Rows()...)
 }
 
 // screenRows is what a screen of cols shows after being fed s, history first.

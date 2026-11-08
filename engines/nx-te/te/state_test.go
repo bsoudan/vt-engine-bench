@@ -74,10 +74,10 @@ func TestScreenStateRoundTrip(t *testing.T) {
 	// Verify buffer content matches.
 	for row := range s.Lines {
 		for col := range s.Columns {
-			if col < len(s.Buffer[row]) && col < len(s2.Buffer[row]) {
-				if s.Buffer[row][col].Data != s2.Buffer[row][col].Data {
+			if col < len(s.Rows()[row]) && col < len(s2.Rows()[row]) {
+				if s.Rows()[row][col].Data != s2.Rows()[row][col].Data {
 					t.Errorf("buffer[%d][%d]: got %q, want %q",
-						row, col, s2.Buffer[row][col].Data, s.Buffer[row][col].Data)
+						row, col, s2.Rows()[row][col].Data, s.Rows()[row][col].Data)
 				}
 			}
 		}
@@ -190,8 +190,8 @@ func TestScrollbackStateRoundTrip(t *testing.T) {
 
 	// Verify visible buffer matches.
 	for row := range h.Lines {
-		orig := cell.Text(h.Buffer[row])
-		restored := cell.Text(h2.Buffer[row])
+		orig := cell.Text(h.Rows()[row])
+		restored := cell.Text(h2.Rows()[row])
 		if orig != restored {
 			t.Errorf("buffer[%d]: got %q, want %q", row, restored, orig)
 		}

@@ -27,7 +27,7 @@ func TestWideCharOverwrite(t *testing.T) {
 		stream.Feed("日X")        // 日@0-1, X@2
 		stream.Feed("\x1b[1;1H") // cursor to (row0, col0) — 日's head
 		stream.Feed("A")
-		if got := screen.Buffer[0][1].Data; got != " " {
+		if got := screen.Rows()[0][1].Data; got != " " {
 			t.Fatalf("orphaned continuation not cleared: Data=%q, want \" \"", got)
 		}
 	})

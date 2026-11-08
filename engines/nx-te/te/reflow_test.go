@@ -44,11 +44,11 @@ func shown(h *ScrollbackScreen) []string {
 	for _, row := range h.ScrollbackRows() {
 		out = append(out, rowText(row))
 	}
-	n := len(h.Buffer)
-	for n > 0 && rowText(h.Buffer[n-1]) == "" {
+	n := len(h.Rows())
+	for n > 0 && rowText(h.Rows()[n-1]) == "" {
 		n--
 	}
-	for _, row := range h.Buffer[:n] {
+	for _, row := range h.Rows()[:n] {
 		out = append(out, rowText(row))
 	}
 	return out
@@ -59,7 +59,7 @@ func wantShown(t *testing.T, h *ScrollbackScreen, what string, want ...string) {
 	if got := shown(h); !reflect.DeepEqual(got, want) {
 		t.Errorf("%s: %q, want %q", what, got, want)
 	}
-	for r, row := range h.Buffer {
+	for r, row := range h.Rows() {
 		if len(row) != h.Columns {
 			t.Errorf("%s: row %d is %d wide, want %d", what, r, len(row), h.Columns)
 		}
@@ -128,8 +128,8 @@ func TestReflowWideGlyphAtTheEdge(t *testing.T) {
 	t.Parallel()
 	h := reflowed(t, 10, 4, 100, "123456789世界")
 	wantShown(t, h, "written", "123456789⏎", "世界")
-	if !h.Buffer[0][9].Empty {
-		t.Errorf("written: the cell the glyph left is %+v, want Empty", h.Buffer[0][9])
+	if !h.Rows()[0][9].Empty {
+		t.Errorf("written: the cell the glyph left is %+v, want Empty", h.Rows()[0][9])
 	}
 
 	h.Resize(4, 20)
@@ -138,11 +138,11 @@ func TestReflowWideGlyphAtTheEdge(t *testing.T) {
 
 	h.Resize(4, 10)
 	wantShown(t, h, "narrowed back", "123456789⏎", "世界")
-	if !h.Buffer[0][9].Empty {
-		t.Errorf("narrowed back: the cell the glyph left is %+v, want Empty", h.Buffer[0][9])
+	if !h.Rows()[0][9].Empty {
+		t.Errorf("narrowed back: the cell the glyph left is %+v, want Empty", h.Rows()[0][9])
 	}
-	if h.Buffer[1][0].Data != "世" || h.Buffer[1][1].Data != "" {
-		t.Errorf("narrowed back: the glyph is %+v %+v, want it and its placeholder", h.Buffer[1][0], h.Buffer[1][1])
+	if h.Rows()[1][0].Data != "世" || h.Rows()[1][1].Data != "" {
+		t.Errorf("narrowed back: the glyph is %+v %+v, want it and its placeholder", h.Rows()[1][0], h.Rows()[1][1])
 	}
 }
 
@@ -153,7 +153,7 @@ func TestReflowKeepsAColouredBlank(t *testing.T) {
 	for _, cols := range []int{20, 4, 10} {
 		h.Resize(4, cols)
 		var blue int
-		for _, row := range h.Buffer {
+		for _, row := range h.Rows() {
 			for _, c := range row {
 				if c.Attr.Bg.Mode != ColorDefault {
 					blue++
@@ -224,7 +224,7 @@ func TestReflowLeavesTheAltScreen(t *testing.T) {
 	t.Parallel()
 	h := reflowed(t, 10, 4, 100, "0123456789abc\r\n$ \x1b[?1049h\x1b[HALTALTALT")
 	h.Resize(4, 20)
-	if got := rowText(h.Buffer[0]); got != "ALTALTALT" {
+	if got := rowText(h.Rows()[0]); got != "ALTALTALT" {
 		t.Errorf("the alt screen's first row %q after widening, want it as written", got)
 	}
 	feed(t, h, "\x1b[?1049l")
@@ -272,8 +272,8 @@ func TestReflowKeepsTheScreensTop(t *testing.T) {
 	h := reflowed(t, 10, 4, 100, "a\r\nb\r\nc\r\nd\r\ne\r\n\x1b[2J\x1b[H$ ")
 	before := len(h.ScrollbackRows())
 	h.Resize(4, 20)
-	if rowText(h.Buffer[0]) != "$" {
-		t.Errorf("widened: the top row %q, want the prompt", rowText(h.Buffer[0]))
+	if rowText(h.Rows()[0]) != "$" {
+		t.Errorf("widened: the top row %q, want the prompt", rowText(h.Rows()[0]))
 	}
 	wantCursor(t, h, "widened", 0, 2)
 	if got := len(h.ScrollbackRows()); got < before {

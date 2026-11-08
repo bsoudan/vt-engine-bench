@@ -39,21 +39,21 @@ func TestPyteTestHistoryIndex(t *testing.T) {
 	if len(screen.scrollback.Top.items) != 0 {
 		t.Fatalf("expected empty history")
 	}
-	line := screen.Buffer[0]
+	line := screen.Rows()[0]
 	screen.Index()
 	if len(screen.scrollback.Top.items) == 0 {
 		t.Fatalf("expected top history")
 	}
-	if pyteHistoryChars([][]Cell{screen.scrollback.Top.items[len(screen.scrollback.Top.items)-1]}, screen.Columns)[0] != pyteHistoryChars([][]Cell{line}, screen.Columns)[0] {
+	if pyteHistoryChars(screen.ScrollbackRows()[len(screen.scrollback.Top.items)-1:], screen.Columns)[0] != pyteHistoryChars([][]Cell{line}, screen.Columns)[0] {
 		t.Fatalf("unexpected history line")
 	}
 
-	line = screen.Buffer[0]
+	line = screen.Rows()[0]
 	screen.Index()
 	if len(screen.scrollback.Top.items) != 2 {
 		t.Fatalf("expected 2 history entries")
 	}
-	if pyteHistoryChars([][]Cell{screen.scrollback.Top.items[len(screen.scrollback.Top.items)-1]}, screen.Columns)[0] != pyteHistoryChars([][]Cell{line}, screen.Columns)[0] {
+	if pyteHistoryChars(screen.ScrollbackRows()[len(screen.scrollback.Top.items)-1:], screen.Columns)[0] != pyteHistoryChars([][]Cell{line}, screen.Columns)[0] {
 		t.Fatalf("unexpected history line")
 	}
 
@@ -71,9 +71,9 @@ func TestPyteTestHistoryIndex(t *testing.T) {
 func TestPyteTestHistoryReverseIndex(t *testing.T) {
 	t.Parallel()
 	screen := NewScrollbackScreen(5, 5, 50)
-	for idx := 0; idx < len(screen.Buffer); idx++ {
+	for idx := 0; idx < len(screen.Rows()); idx++ {
 		screen.Draw(fmt.Sprintf("%d", idx))
-		if idx != len(screen.Buffer)-1 {
+		if idx != len(screen.Rows())-1 {
 			screen.LineFeed()
 		}
 	}

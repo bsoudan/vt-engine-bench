@@ -34,7 +34,7 @@ func updateScreen(screen *Screen, lines []string, colored []int) *Screen {
 			if _, ok := coloredSet[y]; ok {
 				attr.Fg = pyteColor("red")
 			}
-			screen.Buffer[y][x] = Cell{Data: string(char), Attr: attr}
+			screen.rows[y][x] = screen.pack(Cell{Data: string(char), Attr: attr})
 		}
 	}
 	return screen
@@ -44,7 +44,7 @@ func tolist(screen *Screen) [][]Cell {
 	out := make([][]Cell, screen.Lines)
 	for y := 0; y < screen.Lines; y++ {
 		row := make([]Cell, screen.Columns)
-		copy(row, screen.Buffer[y])
+		copy(row, screen.Rows()[y])
 		out[y] = row
 	}
 	return out

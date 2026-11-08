@@ -39,7 +39,7 @@ func TestDrawEmojiWidths(t *testing.T) {
 			// Every wide cluster leaves exactly one placeholder after it, so
 			// the renderer emits the glyph once and skips the second column.
 			placeholders := 0
-			for _, c := range s.Buffer[0][:tc.cols] {
+			for _, c := range s.Rows()[0][:tc.cols] {
 				if c.Data == "" {
 					placeholders++
 				}
