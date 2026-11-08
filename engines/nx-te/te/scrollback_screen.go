@@ -8,17 +8,17 @@ type scrollbackDeque struct {
 // append adds line to the end. Returns true if an existing row was evicted
 // from the front because the deque was at capacity — callers that track
 // seq numbers (Top deque in ScrollbackScreen) bump FirstSeq on eviction.
-func (d *scrollbackDeque) append(line []Cell) (evicted bool) {
+func (d *scrollbackDeque) append(line []Cell) (evicted []Cell, ok bool) {
 	if d.max == 0 {
-		return false
+		return line, false // not kept: the caller may reuse it
 	}
 	if len(d.items) == d.max {
+		evicted, ok = d.items[0], true
+		d.items[0] = nil
 		d.items = d.items[1:]
-		evicted = true
 	}
-	copyLine := append([]Cell(nil), line...)
-	d.items = append(d.items, copyLine)
-	return evicted
+	d.items = append(d.items, line) // the row is the deque's now
+	return evicted, ok
 }
 
 // Scrollback is the rows scrolled off the top of the screen, oldest first.
@@ -109,16 +109,20 @@ func (h *ScrollbackScreen) clearScrollback() {
 // a seq of its own. The Screen calls it (Screen.scrolledOff) for every scroll
 // of the whole primary screen, however the scroll was reached: a line
 // wrapping on the bottom row scrolls inside Screen.Draw.
-func (h *ScrollbackScreen) keepScrolledOff(row []Cell) {
-	if h.scrollback.Top.append(row) {
+func (h *ScrollbackScreen) keepScrolledOff(row []Cell) []Cell {
+	spare, evicted := h.scrollback.Top.append(row)
+	if evicted {
 		h.scrollback.FirstSeq++
 	}
 	h.scrollback.TotalAdded++
+	return spare
 }
 
 // ScrollbackRows returns the retained scrolled-off rows, oldest first — the
 // content above the live Buffer. The returned rows are the live backing slices
-// (read-only); callers must not mutate them. TotalAdded()/Scrollback() give the
+// (read-only); callers must not mutate them, and a row the history lets go of
+// when full becomes the screen's next blank row (Screen.Index), so a caller
+// holds none past the next scroll. TotalAdded()/Scrollback() give the
 // seq anchor and count for view-level scrollback that pins its offset so live
 // output doesn't drift the viewport.
 func (h *ScrollbackScreen) ScrollbackRows() [][]Cell { return h.scrollback.Top.items }
@@ -194,7 +198,7 @@ func (h *ScrollbackScreen) Resize(lines, columns int) {
 			drop--
 		}
 		for i := 0; i < drop; i++ {
-			if h.scrollback.Top.append(h.Buffer[i]) {
+			if _, evicted := h.scrollback.Top.append(h.Buffer[i]); evicted {
 				h.scrollback.FirstSeq++
 			}
 			h.scrollback.TotalAdded++
@@ -262,7 +266,7 @@ func (h *ScrollbackScreen) resizeInactiveBuffer(lines, columns int) {
 			drop--
 		}
 		for i := 0; i < drop; i++ {
-			if h.scrollback.Top.append(h.altBuffer[i]) {
+			if _, evicted := h.scrollback.Top.append(h.altBuffer[i]); evicted {
 				h.scrollback.FirstSeq++
 			}
 			h.scrollback.TotalAdded++

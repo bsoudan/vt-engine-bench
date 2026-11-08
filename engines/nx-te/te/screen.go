@@ -99,7 +99,7 @@ type Screen struct {
 	// buffer pushes off the top, before it goes: a ScrollbackScreen keeps it.
 	// Index calls it, however it was reached — a line feed, or a line
 	// wrapping on the bottom row inside Draw — so no row leaves unkept.
-	scrolledOff         func(row []Cell)
+	scrolledOff         func(row []Cell) []Cell
 	leftMargin          int
 	rightMargin         int
 	wrapNext            bool
@@ -647,13 +647,14 @@ func (s *Screen) Index() {
 		if left == 0 && right == s.Columns-1 {
 			kept := s.scrolledOff != nil && top == 0 && bottom == s.Lines-1 && !s.IsAltScreenActive()
 			s.scrolled(top, bottom, 1, kept)
+			spare := s.Buffer[top]
 			if kept {
-				s.scrolledOff(s.Buffer[top])
+				spare = s.scrolledOff(spare) // the row is the history's; its evicted one is ours
 			}
 			for row := top; row < bottom; row++ {
 				s.Buffer[row] = s.Buffer[row+1]
 			}
-			s.Buffer[bottom] = blankLine(s.Columns, s.defaultCell())
+			s.Buffer[bottom] = refillLine(spare, s.Columns, s.defaultCell())
 		} else {
 			// DECLRMM: scroll only the columns inside the margins, like
 			// ScrollUp, so content outside [left,right] is left in place.
@@ -3246,6 +3247,18 @@ func (s *Screen) translate(data string) string {
 		}
 	}
 	return b.String()
+}
+
+// refillLine is a blank line of cols cells, made in spare when spare is a
+// row of that width nothing else holds, else fresh.
+func refillLine(spare []Cell, cols int, cell Cell) []Cell {
+	if len(spare) != cols {
+		return blankLine(cols, cell)
+	}
+	for i := range spare {
+		spare[i] = cell
+	}
+	return spare
 }
 
 func blankLine(cols int, cell Cell) []Cell {
