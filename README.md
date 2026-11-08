@@ -1,6 +1,6 @@
 # VT engine benchmark (macOS and Linux)
 
-Two separate measurements: **headless parsing + screen-state** and **a shared GPUI viewport observed through the OS screen-capture path** (ScreenCaptureKit on macOS, Mutter's screencast API on Linux/GNOME); on Linux the second also measures **nxgui**, a real GNOME terminal window, the same way. Sources are pinned as git submodules (see `git submodule status` and `Cargo.lock`); `engines/nxterm` is a private repository reached over ssh, so `git submodule update` needs a key that GitHub accepts for it. nxterm's engine, the Go package `te`, is a fifth headless engine: `crates/nxterm-vt` builds it as a C archive with `go build -buildmode=c-archive` (Go on `PATH`; the Nix shell provides it, on macOS `brew install go`) behind a shim as narrow as Ghostty's. Ghostty is pinned to current `main` at [`b699ea7`](https://github.com/ghostty-org/ghostty/commit/b699ea79f4b881421b4b3055abc16a0957d76beb) (1.3.2-dev). Its benchmark-only C shim is compiled against that checkout's headers and links the matching `libghostty-vt` archive; `libghostty-rs` supplies the Zig build integration, **not** its older Rust API. The other engines are pinned source checkouts. Parser-only `vte` is excluded because it has no screen state.
+Two separate measurements: **headless parsing + screen-state** and **a shared GPUI viewport observed through the OS screen-capture path** (ScreenCaptureKit on macOS, Mutter's screencast API on Linux/GNOME); on Linux the second also measures **nxgui**, a real GNOME terminal window, the same way. Sources are pinned as git submodules (see `git submodule status` and `Cargo.lock`), except nxterm's engine, the Go package `te`, which is a fifth headless engine vendored in [`engines/nx-te`](engines/nx-te/README.md) from nxterm `v0.5.1` and changed there for throughput, commit by commit: `crates/nxterm-vt` builds that copy as a C archive with `go build -buildmode=c-archive` (Go on `PATH`; the Nix shell provides it, on macOS `brew install go`) behind a shim as narrow as Ghostty's. `engines/nxterm` itself is a private repository reached over ssh; only the nxgui window-capture run below needs it, so `git submodule update` may skip it. Ghostty is pinned to current `main` at [`b699ea7`](https://github.com/ghostty-org/ghostty/commit/b699ea79f4b881421b4b3055abc16a0957d76beb) (1.3.2-dev). Its benchmark-only C shim is compiled against that checkout's headers and links the matching `libghostty-vt` archive; `libghostty-rs` supplies the Zig build integration, **not** its older Rust API. The other engines are pinned source checkouts. Parser-only `vte` is excluded because it has no screen state.
 
 ```sh
 git submodule update --init --recursive
@@ -54,6 +54,17 @@ Three runs of `cargo run --release -- --csv results/2026-11-07-headless-alpha.cs
 | tmux client (repeated recording), ms | **3.58** | 7.41 | 22.94 | 230.05 | 243.39 |
 
 nxterm's engine passes the same fixtures but parses at about 1.7 MiB/s on the plain scroll, ten to a hundred times slower than the Rust and Zig engines. That is the engine, not the shim: fed from Go directly, without cgo, the same workload takes 437 ms with a 1000-line scrollback and 380 ms with none. It is a pure-Go emulator written for a multiplexer that cuts a pty's output into frames at most every 16 ms, where this throughput is far above what a pty delivers; the comparison is of parse cost, as for the others.
+
+### Recorded run with the vendored, tuned te (same machine, 2026-11-08)
+
+The same three runs ([CSV](results/2026-11-08-headless-alpha-nx-te.csv)) after the `engines/nx-te` commits: an ASCII fast path in `Draw` that skips grapheme segmentation and makes no string per cell, rows recycled between the screen and the history instead of allocated and copied, the erased cell worked out once per erase, CSI parameters read into a reused byte buffer, text runs handed to `Draw` as the bytes they are, grapheme clusters stepped without word and line break state, and the five modes the hot paths read kept as booleans beside the map. Each commit keeps te's 766 tests and `cargo test` green; `TestDrawASCIIMatchesGeneral` draws random mixed text through the fast path and the general path and wants the same screen. Profiles of this state are bound by the cell: `cell.Cell` is 64 bytes (a Go string plus inline attributes), so a scrolled line fills 7.7 KB and a full-screen erase writes 307 KB, which is six tenths of the plain scroll and of the tmux recording. Closing more of the gap to Ghostty's 8-byte cells means changing nxterm's shared cell model, not te alone.
+
+| Workload | alacritty_terminal | Ghostty main | vt100 | wezterm-term | nxterm te (nx-te) |
+|---|---:|---:|---:|---:|---:|
+| plain scroll, ms | 12.99 | **3.17** | 18.71 | 45.92 | 36.06 |
+| ANSI scroll, ms | **9.22** | 19.92 | 15.37 | 25.19 | 31.47 |
+| TUI redraw, ms | 6.04 | **4.22** | 7.09 | 44.92 | 25.03 |
+| tmux client (repeated recording), ms | **3.60** | 7.49 | 22.86 | 231.20 | 35.26 |
 
 ## GPUI window capture (Apple M1 Pro, 2026-10-08)
 
