@@ -56,6 +56,11 @@ type cellTables struct {
 	graphemeIDs map[string]uint32
 	widths      map[gcell]int8 // the width of each text seen (widthOf)
 	compacting  bool
+	// guarded says a style in the table protects its cells from an erase
+	// (DECSCA's or ISO 6429's protection). Every cell's style is in the
+	// table, so until one does, no cell on the screen is protected and an
+	// erase need not look at the cells it clears.
+	guarded bool
 }
 
 // maxStyles is how many distinct Attrs the table holds, the style index
@@ -85,6 +90,9 @@ func (s *Screen) styleID(a Attr) uint16 {
 	id := uint16(len(t.styles))
 	t.styles = append(t.styles, a)
 	t.styleIDs[a] = id
+	if a.Protected || a.ISOProtected {
+		t.guarded = true
+	}
 	return id
 }
 

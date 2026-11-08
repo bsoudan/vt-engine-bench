@@ -1073,6 +1073,10 @@ func (s *Screen) EraseCharacters(params ...int) {
 	line := s.rows[s.Cursor.Row]
 	end := min(s.Cursor.Col+count-1, right)
 	blank := s.blankOf(s.bceAttr())
+	if !s.tables.guarded {
+		copy(line[s.Cursor.Col:end+1], s.blankRowOf(blank))
+		return
+	}
 	for col := s.Cursor.Col; col <= end; col++ {
 		if s.protected(line[col], false) {
 			continue
@@ -1099,6 +1103,10 @@ func (s *Screen) EraseInLine(how int, private bool, _ ...int) {
 		end = right + 1
 	}
 	blank := s.blankOf(s.bceAttr())
+	if !s.tables.guarded {
+		copy(line[start:end], s.blankRowOf(blank))
+		return
+	}
 	for col := start; col < end; col++ {
 		if s.protected(line[col], private) {
 			continue
@@ -1143,7 +1151,7 @@ func (s *Screen) eraseInDisplay(how int, private bool, selective bool) {
 	tmpl := s.blankRowOf(blank)
 	for row := start; row < end; row++ {
 		line := s.rows[row]
-		if !s.rowProtected(line, private) {
+		if !s.tables.guarded || !s.rowProtected(line, private) {
 			copy(line, tmpl) // the whole row at once: most rows guard nothing
 			continue
 		}
