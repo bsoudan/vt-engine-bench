@@ -63,7 +63,8 @@ fn workloads() -> Vec<(&'static str, Vec<u8>)> {
     ]
 }
 
-fn time(name: &str, workload: &str, bytes: &[u8], mut run: impl FnMut(&[u8])) {
+/// Times `run` ROUNDS times, prints the median, and returns it in ms.
+fn time(name: &str, workload: &str, bytes: &[u8], mut run: impl FnMut(&[u8])) -> f64 {
     let mut samples = Vec::new();
     for _ in 0..ROUNDS {
         let start = Instant::now();
@@ -71,11 +72,29 @@ fn time(name: &str, workload: &str, bytes: &[u8], mut run: impl FnMut(&[u8])) {
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     samples.sort_by(f64::total_cmp);
+    let median = samples[ROUNDS / 2];
     println!(
-        "{workload:14} {name:20} {:>9.2} ms   {:>8.1} MiB/s",
-        samples[ROUNDS / 2],
-        bytes.len() as f64 / samples[ROUNDS / 2] / 1048.576
+        "{workload:14} {name:20} {median:>9.2} ms   {:>8.1} MiB/s",
+        bytes.len() as f64 / median / 1048.576
     );
+    median
+}
+
+/// `--csv PATH --run N` appends each median as `run,workload,engine,median_ms`
+/// to PATH (with a header when the file is new), the format of results/*.csv;
+/// scripts/summarize_headless.py turns three such runs into the README table.
+fn csv_target() -> Option<(std::path::PathBuf, u32)> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+    };
+    match (value("--csv"), value("--run")) {
+        (None, None) => None,
+        (Some(path), Some(run)) => Some((path.into(), run.parse().expect("--run takes a number"))),
+        _ => panic!("usage: vt-engine-bench [--csv PATH --run N]"),
+    }
 }
 
 #[cfg(test)]
@@ -167,17 +186,27 @@ mod tests {
                 .collect(),
         );
         assert_eq!(wezterm_rows, expected, "wezterm viewport");
+
+        let mut nxterm = nxterm_vt::Terminal::new(COLS, ROWS);
+        for chunk in bytes.chunks(8192) {
+            nxterm.feed(chunk);
+        }
+        let nxterm_rows = normalize(nxterm.snapshot().0);
+        assert_eq!(nxterm_rows, expected, "nxterm viewport");
     }
 }
 
 fn main() {
+    let csv = csv_target();
+    let mut rows = Vec::new();
     println!(
         "Headless parse + screen-state; {} runs, median; {}x{}; no GUI or PTY",
         ROUNDS, COLS, ROWS
     );
     for (label, bytes) in workloads() {
         println!("{} bytes: {}", label, bytes.len());
-        time("alacritty_terminal", label, &bytes, |bytes| {
+        let mut record = |engine: &str, median: f64| rows.push((label, engine.to_owned(), median));
+        let median = time("alacritty_terminal", label, &bytes, |bytes| {
             let mut term = Term::new(alacritty_config(), &TermSize::new(COLS, ROWS), VoidListener);
             let mut parser: Processor = Processor::new();
             for chunk in bytes.chunks(8192) {
@@ -185,21 +214,24 @@ fn main() {
             }
             black_box(term);
         });
-        time("ghostty-vt-main", label, &bytes, |bytes| {
+        record("alacritty_terminal", median);
+        let median = time("ghostty-vt-main", label, &bytes, |bytes| {
             let mut term = ghostty_vt::Terminal::new(COLS as u16, ROWS as u16);
             for chunk in bytes.chunks(8192) {
                 term.feed(chunk);
             }
             black_box(term);
         });
-        time("vt100", label, &bytes, |bytes| {
+        record("ghostty-vt-main", median);
+        let median = time("vt100", label, &bytes, |bytes| {
             let mut parser = vt100::Parser::new(ROWS as u16, COLS as u16, 1000);
             for chunk in bytes.chunks(8192) {
                 parser.process(chunk);
             }
             black_box(parser);
         });
-        time("wezterm-term", label, &bytes, |bytes| {
+        record("vt100", median);
+        let median = time("wezterm-term", label, &bytes, |bytes| {
             let size = TerminalSize {
                 rows: ROWS,
                 cols: COLS,
@@ -219,5 +251,32 @@ fn main() {
             }
             black_box(term);
         });
+        record("wezterm-term", median);
+        let median = time("nxterm-te", label, &bytes, |bytes| {
+            let mut term = nxterm_vt::Terminal::new(COLS, ROWS);
+            for chunk in bytes.chunks(8192) {
+                term.feed(chunk);
+            }
+            black_box(term);
+        });
+        record("nxterm-te", median);
+    }
+    if let Some((path, run)) = csv {
+        use std::io::Write;
+        let fresh = std::fs::metadata(&path)
+            .map(|m| m.len() == 0)
+            .unwrap_or(true);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .expect("open --csv file");
+        if fresh {
+            writeln!(file, "run,workload,engine,median_ms").unwrap();
+        }
+        for (workload, engine, median) in rows {
+            writeln!(file, "{run},{workload},{engine},{median:.2}").unwrap();
+        }
+        println!("appended run {run} to {}", path.display());
     }
 }

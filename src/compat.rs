@@ -12,6 +12,7 @@ struct Engines {
     ghostty: GhosttyTerminal,
     vt100: vt100::Parser,
     wezterm: WezTerm,
+    nxterm: nxterm_vt::Terminal,
 }
 
 impl Engines {
@@ -36,6 +37,7 @@ impl Engines {
                 "0",
                 Box::new(std::io::sink()),
             ),
+            nxterm: nxterm_vt::Terminal::new(cols, rows),
         }
     }
 
@@ -46,10 +48,11 @@ impl Engines {
             self.ghostty.feed(chunk);
             self.vt100.process(chunk);
             self.wezterm.advance_bytes(chunk);
+            self.nxterm.feed(chunk);
         }
     }
 
-    fn rows(&self, cols: usize, rows: usize) -> [Vec<String>; 4] {
+    fn rows(&self, cols: usize, rows: usize) -> [Vec<String>; 5] {
         let alacritty: Vec<String> = (0..rows)
             .map(|y| {
                 (&self.alacritty.grid()[Line(y as i32)])
@@ -78,7 +81,8 @@ impl Engines {
             .iter()
             .map(|line| line.as_str().to_string())
             .collect();
-        [alacritty, ghostty, vt100, wezterm].map(|rows: Vec<String>| {
+        let nxterm = self.nxterm.snapshot().0;
+        [alacritty, ghostty, vt100, wezterm, nxterm].map(|rows: Vec<String>| {
             rows.into_iter()
                 .map(|row| row.trim_end().to_owned())
                 .collect()
@@ -96,6 +100,7 @@ impl Engines {
             pixel_height: rows * 16,
             dpi: 96,
         });
+        self.nxterm.resize(cols, rows);
     }
 }
 
@@ -112,6 +117,7 @@ fn cursor_and_clear() {
     assert_eq!(engines.vt100.screen().cursor_position(), (2, 1));
     let w = engines.wezterm.cursor_pos();
     assert_eq!((w.x, w.y), (1, 2));
+    assert_eq!(engines.nxterm.cursor(), (1, 2));
 }
 
 #[test]
@@ -164,6 +170,10 @@ fn truecolor_and_bold() {
         }
         other => panic!("wezterm bg: {other:?}"),
     }
+    let (_, fg, bg) = engines.nxterm.snapshot();
+    assert_eq!((fg.mode, fg.r, fg.g, fg.b), (3, 17, 34, 51), "nxterm fg");
+    assert_eq!((bg.mode, bg.r, bg.g, bg.b), (3, 68, 85, 102), "nxterm bg");
+    assert_eq!(fg.bold, 1, "nxterm bold");
     for (i, rows) in engines.rows(12, 4).into_iter().enumerate() {
         assert_eq!(rows[0], "XY", "engine {i} colors text");
     }
@@ -187,6 +197,8 @@ fn indexed_color_and_alternate_screen() {
         w[0].get_cell(0).unwrap().attrs().foreground(),
         ColorAttribute::PaletteIndex(196)
     );
+    let fg = engines.nxterm.snapshot().1;
+    assert_eq!((fg.mode, fg.index), (2, 196), "nxterm indexed fg");
     for (i, rows) in engines.rows(12, 4).into_iter().enumerate() {
         assert_eq!(rows[0], "R", "engine {i} alternate screen");
     }
@@ -248,4 +260,9 @@ fn scrollback_retains_earliest_line() {
     assert!(engines.ghostty.snapshot().0.join("\n").contains("FIRST"));
     engines.vt100.screen_mut().set_scrollback(2);
     assert!(engines.vt100.screen().contents().contains("FIRST"));
+    let history = engines.nxterm.history();
+    assert!(
+        history.iter().any(|row| row.contains("FIRST")),
+        "nxterm history: {history:?}"
+    );
 }

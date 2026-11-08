@@ -3439,6 +3439,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nxterm-vt"
+version = "0.1.0"
+
+[[package]]
 name = "objc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5994,6 +5998,7 @@ dependencies = [
  "alacritty_terminal",
  "current-ghostty",
  "gpui",
+ "nxterm-vt",
  "vt100",
  "wezterm-cell",
  "wezterm-term",

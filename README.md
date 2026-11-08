@@ -1,6 +1,6 @@
 # VT engine benchmark (macOS and Linux)
 
-Two separate measurements: **headless parsing + screen-state** and **a shared GPUI viewport observed through the OS screen-capture path** (ScreenCaptureKit on macOS, Mutter's screencast API on Linux/GNOME); on Linux the second also measures **nxgui**, a real GNOME terminal window, the same way. Sources are pinned as git submodules (see `git submodule status` and `Cargo.lock`); `engines/nxterm` is a private repository reached over ssh, so `git submodule update` needs a key that GitHub accepts for it. Ghostty is pinned to current `main` at [`b699ea7`](https://github.com/ghostty-org/ghostty/commit/b699ea79f4b881421b4b3055abc16a0957d76beb) (1.3.2-dev). Its benchmark-only C shim is compiled against that checkout's headers and links the matching `libghostty-vt` archive; `libghostty-rs` supplies the Zig build integration, **not** its older Rust API. The other engines are pinned source checkouts. Parser-only `vte` is excluded because it has no screen state.
+Two separate measurements: **headless parsing + screen-state** and **a shared GPUI viewport observed through the OS screen-capture path** (ScreenCaptureKit on macOS, Mutter's screencast API on Linux/GNOME); on Linux the second also measures **nxgui**, a real GNOME terminal window, the same way. Sources are pinned as git submodules (see `git submodule status` and `Cargo.lock`); `engines/nxterm` is a private repository reached over ssh, so `git submodule update` needs a key that GitHub accepts for it. nxterm's engine, the Go package `te`, is a fifth headless engine: `crates/nxterm-vt` builds it as a C archive with `go build -buildmode=c-archive` (Go on `PATH`; the Nix shell provides it, on macOS `brew install go`) behind a shim as narrow as Ghostty's. Ghostty is pinned to current `main` at [`b699ea7`](https://github.com/ghostty-org/ghostty/commit/b699ea79f4b881421b4b3055abc16a0957d76beb) (1.3.2-dev). Its benchmark-only C shim is compiled against that checkout's headers and links the matching `libghostty-vt` archive; `libghostty-rs` supplies the Zig build integration, **not** its older Rust API. The other engines are pinned source checkouts. Parser-only `vte` is excluded because it has no screen state.
 
 ```sh
 git submodule update --init --recursive
@@ -11,23 +11,23 @@ PATH="$PWD/.context/zig:$PATH" cargo run --release
 
 On Linux, `./enter` opens the Nix dev shell (`flake.nix`, `nix/shell.nix`) with Rust, Zig 0.16, the libraries GPUI's Wayland backend links or dlopens (xkbcommon, libxcb, FreeType, Fontconfig, Wayland, the Vulkan loader), and the PyGObject + GStreamer + PipeWire stack the Linux window-capture collector uses; inside it, run `cargo test`, `cargo run --release` and `bash scripts/run_gpui_bench.sh` as they are, without the `PATH` prefix. The shell runs in a read-only sandbox of the system (`nix/sandbox.nix`); the scripts still reach the desktop session because they name its sockets by path. GPUI's dependency tree needs one Linux fix: `crates/xattr` is the `xattr` 0.2.3 release with its removed-from-libc `ENOATTR` alias replaced, substituted through `[patch.crates-io]`.
 
-Three workloads are generated in `src/main.rs`: 15k plain scroll lines, 15k 256-color lines, and 10k cursor-positioned/cleared TUI updates. A fourth is a **real tmux client PTY recording** (`fixtures/tmux-redraw.bin`, 25,641 bytes, SHA-256 `d30383bb7658ae386f6f8e70e7d26bc8f1484b95d1199cbaf81715ad7233b7da`) captured by `python3 scripts/capture_tmux.py`, replayed ten times for timing. Re-capturing changes the fixture; the committed bytes define this run. The capture uses `/bin/sh`, a temporary socket and config, and disables tmux's status line to avoid machine-identifying data.
+`cargo run --release -- --csv FILE --run N` also appends the run's medians to FILE (`run,workload,engine,median_ms`); `python3 scripts/summarize_headless.py FILE` prints the median-of-runs table below from three such runs. Three workloads are generated in `src/main.rs`: 15k plain scroll lines, 15k 256-color lines, and 10k cursor-positioned/cleared TUI updates. A fourth is a **real tmux client PTY recording** (`fixtures/tmux-redraw.bin`, 25,641 bytes, SHA-256 `d30383bb7658ae386f6f8e70e7d26bc8f1484b95d1199cbaf81715ad7233b7da`) captured by `python3 scripts/capture_tmux.py`, replayed ten times for timing. Re-capturing changes the fixture; the committed bytes define this run. The capture uses `/bin/sh`, a temporary socket and config, and disables tmux's status line to avoid machine-identifying data.
 
 120×40 cells, 1k scrollback in each engine where configurable, chunks of 8192 bytes. Seven runs per workload/engine, median wall time includes creating a fresh model and dropping it; throughput uses input bytes. No GUI, live PTY during timing, glyph rendering, font shaping, or latency. Run when machine is otherwise idle. Higher throughput here **does not mean smoother or faster terminal UI**. Different protocol feature sets and implementation paths mean this is exploratory, not a compliance-normalized comparison. The Ghostty C shim intentionally exposes only APIs the benchmark tests; do not treat it as a general-purpose Rust binding. `cargo test` checks **all four engines reproduce the exact expected visible text** (the `frame 0150` header and 38 numbered lines) after the same 8192-byte chunking and ten replays used in timing. Additional small-screen fixtures in `src/compat.rs` check the behaviors below with 7-byte chunking (splitting ANSI escapes and UTF-8). These checks do not establish broad VT compliance. The previous recording included a shell prompt after the last frame; it caused a scroll and divergent end state. The capture script now keeps the command running while recording the final frame, removing that ambiguous post-command transition. Replaying ten times also repeats initialization sequences; it is not a continuous tmux session.
 
 ## Core compatibility checks
 
-| Check | Alacritty | Ghostty main | vt100 | WezTerm |
-|---|:---:|:---:|:---:|:---:|
-| Repeated tmux client: exact visible text | ✓ | ✓ | ✓ | ✓ |
-| Cursor addressing and line clear | ✓ | ✓ | ✓ | ✓ |
-| Truecolor foreground/background and bold | ✓ | ✓ | ✓ | ✓ |
-| Indexed color and alternate-screen restore | ✓ | ✓ | ✓ | ✓ |
-| Wide Unicode and combining marks | ✓ | ✓ | ✓ | ✓ |
-| Preserve text on resize | ✓ | ✓ | ✓ | ✓ |
-| Retain and inspect scrollback | ✓ | ✓ | ✓ | ✓ |
+| Check | Alacritty | Ghostty main | vt100 | WezTerm | nxterm te |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Repeated tmux client: exact visible text | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Cursor addressing and line clear | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Truecolor foreground/background and bold | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Indexed color and alternate-screen restore | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Wide Unicode and combining marks | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Preserve text on resize | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Retain and inspect scrollback | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-Only the **specific fixtures** pass; this is not a complete VT conformance suite. In particular, mouse input, selection, OSC clipboard, hyperlinks, grapheme clustering, error handling, exact cursor shape, rendering, and latency remain untested. The Ghostty column tests the pinned current-main C API through a narrow benchmark shim, not the full macOS app.
+Only the **specific fixtures** pass; this is not a complete VT conformance suite. In particular, mouse input, selection, OSC clipboard, hyperlinks, grapheme clustering, error handling, exact cursor shape, rendering, and latency remain untested. The Ghostty column tests the pinned current-main C API through a narrow benchmark shim, not the full macOS app; the nxterm column tests its `te` package the same way, through `crates/nxterm-vt`, not nxgui or nxterm.
 
 ## Recorded run (Apple M1 Pro, macOS 15.4.1, release build, 2026-10-06)
 
@@ -41,6 +41,7 @@ Only the **specific fixtures** pass; this is not a complete VT conformance suite
 [Raw per-run medians](results/2026-10-06-m1-pro-current-ghostty.csv) are included. Values are the **median of three independent process runs**, each reporting the median of seven iterations. This is not a controlled system-wide benchmark. [Previous runs](results/2026-10-06-m1-pro.csv) used Ghostty 1.2.3 and Alacritty's 10k-line default scrollback; **do not compare them directly** to these 1k-line results.
 
 **Do not select a GPUI terminal core on these numbers alone.** All four pass the bounded core fixtures; none is proven the fastest rendered terminal. Ghostty leads plain output and synthetic TUI redraws; Alacritty leads this recorded tmux stream and ANSI output.
+
 
 ## GPUI window capture (Apple M1 Pro, 2026-10-08)
 

@@ -20,6 +20,7 @@ wezterm-term = { path = "engines/wezterm/term" }
 wezterm-cell = { path = "engines/wezterm/wezterm-cell" }
 
 ghostty_vt = { package = "current-ghostty", path = "crates/current-ghostty" }
+nxterm_vt = { package = "nxterm-vt", path = "crates/nxterm-vt" }
 
 # gpui -> http_client -> async-tar pins xattr 0.2.3, which no longer compiles
 # against current libc on Linux (the ENOATTR alias was removed). crates/xattr
