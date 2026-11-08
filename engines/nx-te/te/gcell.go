@@ -1,6 +1,9 @@
 package te
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // A screen stores its cells as gcells, eight bytes each, as Ghostty does:
 // the text is a codepoint, or an index into the screen's table of
@@ -123,6 +126,7 @@ func (s *Screen) graphemeID(cluster string) uint32 {
 		t.graphemeIDs = make(map[string]uint32)
 		t.graphemes = []string{""} // index 0 is never a cluster: text 0 is no text
 	}
+	cluster = strings.Clone(cluster) // the text drawn is the stream's for the call only
 	id := uint32(len(t.graphemes))
 	t.graphemes = append(t.graphemes, cluster)
 	t.graphemeIDs[cluster] = id

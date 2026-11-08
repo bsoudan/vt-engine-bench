@@ -108,7 +108,7 @@ func (s *Screen) MarshalState() *ScreenState {
 		SavedColumns: clonePtr(s.SavedColumns),
 
 		WrapNext:  s.wrapNext,
-		LastDrawn: s.lastDrawn,
+		LastDrawn: s.text(s.lastDrawn),
 
 		Title:          s.Title,
 		IconName:       s.IconName,
@@ -171,7 +171,7 @@ func (s *Screen) UnmarshalState(st *ScreenState) {
 	s.SavedColumns = clonePtr(st.SavedColumns)
 
 	s.wrapNext = st.WrapNext
-	s.lastDrawn = st.LastDrawn
+	s.lastDrawn = s.cellOf(st.LastDrawn, 0)
 
 	s.Title = st.Title
 	s.IconName = st.IconName

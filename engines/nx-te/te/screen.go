@@ -67,7 +67,7 @@ type Screen struct {
 	Widths             cell.WidthPolicy  // how the terminal this screen shadows sizes ambiguous emoji
 	TerminalName       string            // XTVERSION reply, e.g. "nxterm(v0.1-beta)". Empty means no reply.
 	Capabilities       map[string]string // XTGETTCAP replies: terminfo capabilities by name, e.g. "Ms". Nil means no reply.
-	lastDrawn          string
+	lastDrawn          gcell             // the last glyph drawn, for REP; none, no text
 	// SyncOutput, if set, is told where in the stream the program begins
 	// a frame as synchronized output (begun, CSI ? 2026 h — each one, set
 	// already or not) and where it ends one (CSI ? 2026 l, or a reset that
@@ -616,7 +616,7 @@ func (s *Screen) drawGlyph(cluster string, width int, sid uint16) bool {
 	}
 
 	if width > 0 {
-		s.lastDrawn = cluster
+		s.lastDrawn = s.cellOf(cluster, 0)
 		nextCol := s.Cursor.Col + width
 		if nextCol > limit {
 			if s.isModeSet(ModeDECAWM) {
@@ -686,7 +686,7 @@ func (s *Screen) drawASCII(data string, sid uint16) {
 			}
 			cells[i] = gcell{text: uint32(data[i]), style: sid}
 		}
-		s.lastDrawn = asciiCell[data[n-1]]
+		s.lastDrawn = gcell{text: uint32(data[n-1])}
 		data = data[n:]
 		if next := col + n; next > limit {
 			if autowrap {
@@ -1502,11 +1502,12 @@ func (s *Screen) RepeatLast(params ...int) {
 	if count <= 0 {
 		count = 1
 	}
-	if s.lastDrawn == "" {
+	if s.lastDrawn.text == 0 {
 		return
 	}
+	last := s.text(s.lastDrawn)
 	for i := 0; i < count; i++ {
-		s.Draw(s.lastDrawn)
+		s.Draw(last)
 	}
 }
 

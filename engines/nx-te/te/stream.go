@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // ErrNoListener is returned when no event handler is attached.
@@ -75,6 +76,9 @@ type EventHandler interface {
 	SetMargins(params ...int)
 	SetLeftRightMargins(left, right int)
 	SelectGraphicRendition(attrs []int, private bool)
+	// Draw is given the plain text of the input as it is read: data is
+	// the stream's view of the caller's bytes, good for the call only. A
+	// handler that keeps any of it keeps a copy.
 	Draw(data string)
 	Debug(params ...interface{})
 	SetMode(modes []int, private bool)
@@ -241,7 +245,9 @@ func (st *Stream) FeedBytes(data []byte) (err error) {
 			return
 		}
 		if raw {
-			st.listener.Draw(string(data[start:end]))
+			// The run as a string over the caller's bytes, not a copy: Draw
+			// is told it lasts for the call only.
+			st.listener.Draw(unsafe.String(unsafe.SliceData(data[start:end]), end-start))
 		} else {
 			st.listener.Draw(string(textBuf))
 			textBuf = textBuf[:0]
