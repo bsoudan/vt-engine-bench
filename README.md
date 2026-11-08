@@ -72,17 +72,17 @@ Timestamps are taken when GStreamer hands over the frame, so `event→pixel` inc
 
 #### Recorded run (Intel i3-4130T, GeForce GTX 860M, NVIDIA 580.178, GNOME Shell 50.5 on NixOS, LG TV over HDMI at 1920×1080 119.88 Hz, 2026-11-07)
 
-Each figure is the **median of three independent runs**; ms is lower-is-better. One vt100 run was repeated once (65 of 80 updates captured on the first attempt).
+Each figure is the **median of three independent runs**; ms is lower-is-better. One vt100 run was repeated once (65 of 80 updates captured on the first attempt). The nxgui column (see below) was measured in a separate invocation the same day with the same settings; its key→pixel is from the key reaching the program in the terminal, and its observed-update counts are its own repaint rate, not capture loss.
 
-| GPUI metric | Alacritty | Ghostty main | vt100 | WezTerm |
-|---|---:|---:|---:|---:|
-| Tmux observed updates / 80 | 76 | 79 | 79 | 75 |
-| Tmux event→pixel median, ms | 17.98 | 17.48 | 19.22 | 16.99 |
-| Tmux event→pixel p95, ms | 30.88 | 28.32 | 26.84 | 25.58 |
-| Tmux changed-frame interval median, ms | 16.67 | 16.66 | 16.67 | 16.69 |
-| Tmux changed-frame interval p95, ms | 27.87 | 26.28 | 26.62 | 25.37 |
-| Synthetic key→pixel median, ms | 10.58 | 9.94 | 13.21 | 10.40 |
-| Synthetic key→pixel p95, ms | 14.63 | 13.28 | 17.22 | 14.14 |
+| GPUI metric | Alacritty | Ghostty main | vt100 | WezTerm | nxgui 0.5.1 |
+|---|---:|---:|---:|---:|---:|
+| Tmux observed updates / 80 | 76 | 79 | 79 | 75 | 57 |
+| Tmux event→pixel median, ms | 17.98 | 17.48 | 19.22 | 16.99 | 49.81 |
+| Tmux event→pixel p95, ms | 30.88 | 28.32 | 26.84 | 25.58 | 66.07 |
+| Tmux changed-frame interval median, ms | 16.67 | 16.66 | 16.67 | 16.69 | 24.50 |
+| Tmux changed-frame interval p95, ms | 27.87 | 26.28 | 26.62 | 25.37 | 31.34 |
+| Synthetic key→pixel median, ms | 10.58 | 9.94 | 13.21 | 10.40 | 56.81 |
+| Synthetic key→pixel p95, ms | 14.63 | 13.28 | 17.22 | 14.14 | 67.00 |
 
 [Per-run summary](results/2026-11-07-gpui-alpha-gtx860m.csv) · [Raw event timestamps, captured frames, and logs](results/2026-11-07-gpui-alpha-gtx860m/). The four engines sit within a few ms of each other on every metric, as on macOS; the tmux p95 spread comes from the 120 Hz compositor occasionally coalescing two updates into one paint. The machine had nothing else running on its desktop.
 
@@ -94,6 +94,6 @@ Each figure is the **median of three independent runs**; ms is lower-is-better. 
 - the feeder waits for a pty of at least 120×40, clears the screen and paints the marker in the terminal's own cells: a 16-column bar of marker-blue spaces down the right edge, which the collector locates and samples exactly as it does the GPUI window's bar. It then writes the recording to the pty in 80 chunks at 16 ms intervals, each followed by the bar in the next color, with chunks cut at escape-sequence and UTF-8 boundaries so the bar's own escapes never land inside a split sequence; the recording's lines may overwrite part of the bar for a frame, which the classifier ignores;
 - for the key phase `nxgui_keys.py` presses `a` 40 times at 40 ms intervals through GNOME, so the key crosses GNOME Shell, GTK, nxgui, nxterm and the pty; the feeder answers each key byte with the same `INPUT nnn a` line the GPUI key handler writes, plus the bar.
 
-`events.csv` keeps the GPUI app's meaning: a tmux update's time is taken just before its write to the pty, an input's when its key byte reaches the feeder (the GPUI app's handler sees the key at that point too), so `key→pixel` is the terminal's output path in both cases. The injection times are kept beside it in `<run>-keys.csv`; the difference is the input path, which the GPUI app does not have. What differs from the GPUI subjects: the bytes pass through a pty and a separate process before the renderer; the viewport is nxgui's own, with its header bar, in a maximized window on the same monitor; and nxgui's final viewport is not checked against the expected text (the recording's layout is the same 120×40, the bar aside, when the window reached that size, which the feeder notes in `<run>-app.log`).
+`events.csv` keeps the GPUI app's meaning: a tmux update's time is taken just before its write to the pty, an input's when its key byte reaches the feeder (the GPUI app's handler sees the key at that point too), so `key→pixel` is the terminal's output path in both cases. The injection times are kept beside it in `<run>-keys.csv`; the difference is the input path, which the GPUI app does not have: in the run above a key took 12.1 ms median (23.1 ms p95) from Mutter to the feeder, 69.5 ms median (80.9 ms p95) from Mutter to the pixel. What differs from the GPUI subjects: the bytes pass through a pty and a separate process before the renderer; the viewport is nxgui's own, with its header bar, in a maximized window on the same monitor (237×61 cells here); and nxgui's final viewport is not checked against the expected text (the recording's layout is the same 120×40, the bar aside, when the window reached that size, which the feeder notes in `<run>-app.log`).
 
-One check differs for nxgui. The GPUI app renders every update, so fewer than 70 of 80 observed tmux updates means the capture fell behind and the run is rejected. nxgui repaints at its own pace (its vtapp cuts the program's output into frames at most every 16 ms and its GTK window redraws on its own frame clock), so updates sent 16 ms apart may be coalesced on its side; `summarize_gpui.py` reports that count as a result for nxgui instead of enforcing the minimum, while its other checks (every marker state in order, first and last observed, plausible latencies) still apply. Its event→pixel figures are therefore for the updates that were painted.
+One check differs for nxgui. The GPUI app renders every update, so fewer than 70 of 80 observed tmux updates means the capture fell behind and the run is rejected. nxgui repaints at its own pace (every ~25 ms here, three vblanks of the 120 Hz display), so updates sent 16 ms apart are coalesced on its side and about 57 of 80 ever reach the screen; `summarize_gpui.py` reports that count as a result for nxgui instead of enforcing the minimum, while its other checks (every marker state in order, first and last observed, plausible latencies) still apply. Its event→pixel figures are therefore for the updates that were painted.
